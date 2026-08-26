@@ -1,4 +1,4 @@
-{{ config(materialized='table', tags=['daily']) }}
+{{ config(materialized='table', tags=['dai }}
 
 SELECT
     t.transaction_id,
