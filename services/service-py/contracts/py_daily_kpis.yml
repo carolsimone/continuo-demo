@@ -13,7 +13,7 @@ nodes:
     # the rows this read returns. Raw (unaggregated) columns are selected here
     # on purpose so the aggregation logic lives in Python, not in the read.
     reads:
-      daily: select created_at, amount_eur from analytics.daily_transactions
+      daily: select created_at, amount from analytics.daily_transactions
     output_columns:
       - {name: day, type: DATE, nullable: false}
       - {name: tx_count, type: INTEGER, nullable: false}
