@@ -4,7 +4,7 @@ nodes:
   # analytics.daily_transactions is produced by the core service's dbt project.
   - schema: analytics
     table: py_daily_kpis
-    description: "Daily transaction count and total EUR amount, rolled up from analytics.daily_transactions."
+    description: "Daily transaction count and total amount in EUR, rolled up from analytics.daily_transactions."
     owner: "service-py"
     schedule: daily
     criticality: SECONDARY
