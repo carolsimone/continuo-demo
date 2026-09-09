@@ -28,7 +28,7 @@ activity AS (
         user_id::int                       AS user_id,
         COUNT(*)                           AS transaction_count,
         ROUND(SUM(amount_eur), 2)          AS gross_volume_eur,
-        ROUND(SUM(fee_amount_eurr), 2)      AS revenue_eur,
+        ROUND(SUM(fee_amount_eur), 2)       AS revenue_eur,
         MIN(created_at::timestamp)         AS first_transaction_at,
         MAX(created_at::timestamp)         AS last_transaction_at
     FROM {{ ref('daily_transactions') }}
