@@ -43,6 +43,7 @@ SELECT
     COALESCE(a.transaction_count, 0)  AS transaction_count,
     COALESCE(a.gross_volume_eur, 0)   AS gross_volume_eur,
     COALESCE(a.fee_revenue_eur, 0)    AS fee_revenue_eur,
+    COALESCE(a.fee_revenue_eur, 0)    AS revenue_eur,
     a.first_transaction_at,
     a.last_transaction_at
 FROM users u
