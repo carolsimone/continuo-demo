@@ -15,7 +15,7 @@ models:
       - name: spend_eur
         description: "Total spend for the channel that month, in EUR, rounded to cents."
         tests:
-          - not_nul
+          - not_null
       - name: campaign_count
         description: "Number of campaign-level seed rows rolled into this channel-month."
         tests:
