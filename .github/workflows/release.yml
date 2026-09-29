@@ -171,8 +171,8 @@ jobs:
       - name: Install continuo-python-runtime
         if: needs.detect.outputs.kind == 'python' && needs.detect.outputs.skip_release != 'true'
         run: |
-          uv tool install continuo-python-runtime==0.4.0 || \
-            uv tool install "git+https://github.com/carolsimone/continuo-python-runtime@v0.4.0"
+          uv tool install continuo-python-runtime==0.6.0 || \
+            uv tool install "git+https://github.com/carolsimone/continuo-python-runtime@v0.6.0"
 
       # Fast feedback only: this only looks at the service's scripts/. `continuo-runtime
       # merge` (below) independently lints the script plus its whole in-repo import
