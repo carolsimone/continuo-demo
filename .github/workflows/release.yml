@@ -2,8 +2,14 @@ name: release
 
 # Deploy a dbt model change through continuo's blue/green pipeline:
 # build+push the per-service images, then POST a release to continuo
-# (the first run auto-bootstraps; see scripts/release.sh).
-# dbt compile + manifest upload now happen inside continuo itself.
+# (a first release bootstraps only when the repository's continuo binding allows
+# it; see scripts/release.sh). dbt compile + manifest upload happen inside
+# continuo itself.
+#
+# The release call goes to continuo's public release API (the repository
+# variable CONTINUO_URL) authenticated with this workflow's GitHub Actions OIDC
+# token, so the release job needs `id-token: write` and the repository must be
+# bound in continuo's `ciAuth.bindings`.
 #
 # Manual dispatch releases a named service at the current main HEAD, and can
 # force a bootstrap (promote without validation, re-baselining the whole
@@ -135,13 +141,15 @@ jobs:
     needs: detect
     if: needs.detect.outputs.skip != 'true'
     runs-on: ubuntu-latest
-    # Backstop against a wedged step (e.g. a stuck SSH/poll) idling for GitHub's
+    # Backstop against a wedged step (e.g. a stuck release poll) idling for GitHub's
     # 6-hour default. The budget covers the arm64 half of the image build, which
     # runs under QEMU emulation and is several times slower than the native
     # amd64 half, plus release.sh's own ~9-minute poll ceiling.
     timeout-minutes: 30
     permissions:
       contents: read
+      # Lets release.sh request this run's OIDC token for continuo's API.
+      id-token: write
 
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -263,17 +271,11 @@ jobs:
             --endpoint-url https://nbg1.your-objectstorage.com \
             --region eu-central-1
 
-      - name: Configure SSH for continuo-server
-        if: needs.detect.outputs.skip_release != 'true'
-        run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.HETZNER_SSH_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-
       - name: Drive the release through continuo
         if: needs.detect.outputs.skip_release != 'true'
         env:
-          HETZNER_HOST: ${{ secrets.HETZNER_HOST }}
+          # Origin of continuo's ui, e.g. https://continuo.example.com.
+          CONTINUO_URL: ${{ vars.CONTINUO_URL }}
           RELEASE_ID: ${{ needs.detect.outputs.release_id }}
           SERVICE: ${{ needs.detect.outputs.service }}
           # dbt keeps the bare short sha continuo composes into a pull ref
@@ -285,4 +287,9 @@ jobs:
           COMMIT_SHA: ${{ github.sha }}
           # Renders 'false' on push events, where inputs is empty.
           FORCE_BOOTSTRAP: ${{ inputs.force_bootstrap == true }}
-        run: bash scripts/release.sh
+        run: |
+          if [ -z "${CONTINUO_URL}" ]; then
+            echo "::error::the repository variable CONTINUO_URL is empty; set it to the origin of continuo's ui"
+            exit 1
+          fi
+          bash scripts/release.sh
