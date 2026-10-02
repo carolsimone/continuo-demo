@@ -15,7 +15,9 @@ name: release
 # force a bootstrap (promote without validation, re-baselining the whole
 # estate's content hashes) — needed after continuo changes its hash formula,
 # when every stored hash mismatches and a normal release would validate the
-# entire topology.
+# entire topology. A bootstrap from this workflow is refused by continuo unless
+# the repository's binding sets `allowBootstrap: true`; otherwise it needs an
+# operator token (see scripts/release.sh).
 on:
   push:
     branches: [main]
@@ -144,8 +146,8 @@ jobs:
     # Backstop against a wedged step (e.g. a stuck release poll) idling for GitHub's
     # 6-hour default. The budget covers the arm64 half of the image build, which
     # runs under QEMU emulation and is several times slower than the native
-    # amd64 half, plus release.sh's own ~9-minute poll ceiling.
-    timeout-minutes: 30
+    # amd64 half, plus release.sh's own 15-minute POLL_TIMEOUT_SECONDS budget.
+    timeout-minutes: 40
     permissions:
       contents: read
       # Lets release.sh request this run's OIDC token for continuo's API.
@@ -155,6 +157,18 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
 
     steps:
+      # Fail before the image build and the S3 upload when continuo's address is
+      # not configured, rather than after them.
+      - name: Require the CONTINUO_URL repository variable
+        if: needs.detect.outputs.skip_release != 'true'
+        env:
+          CONTINUO_URL: ${{ vars.CONTINUO_URL }}
+        run: |
+          if [ -z "${CONTINUO_URL}" ]; then
+            echo "::error::the repository variable CONTINUO_URL is empty; set it to the origin of continuo's ui"
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -287,9 +301,4 @@ jobs:
           COMMIT_SHA: ${{ github.sha }}
           # Renders 'false' on push events, where inputs is empty.
           FORCE_BOOTSTRAP: ${{ inputs.force_bootstrap == true }}
-        run: |
-          if [ -z "${CONTINUO_URL}" ]; then
-            echo "::error::the repository variable CONTINUO_URL is empty; set it to the origin of continuo's ui"
-            exit 1
-          fi
-          bash scripts/release.sh
+        run: bash scripts/release.sh
