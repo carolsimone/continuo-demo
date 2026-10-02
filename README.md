@@ -97,7 +97,7 @@ An operator token may also bootstrap a service (`FORCE_BOOTSTRAP=true`, or autom
 shellcheck scripts/release.sh
 
 # release.sh against a stub of continuo's release API (needs curl and jq):
-uvx pytest scripts/tests/test_release_sh.py
+uvx pytest==9.1.1 scripts/tests/test_release_sh.py
 
 # Python services: lint/validate/merge with continuo-runtime. Pinned exactly
 # (same pin as the release.yml/ci.yml install steps) — move this version only
