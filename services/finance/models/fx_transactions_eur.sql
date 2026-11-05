@@ -11,6 +11,7 @@ SELECT
     t.created_at,
     r.rate_to_eur,
     ROUND((t.amount * r.rate_to_eur)::numeric, 2)     AS amount_converted_eur,
+    ROUND((t.amount * r.rate_to_eur)::numeric, 2)     AS amount_eur,
     -- The fee is denominated in currency_from, so it converts on the same
     -- join as the amount. This is why the seed does not carry a EUR fee.
     ROUND((t.fee_amount * r.rate_to_eur)::numeric, 2) AS fee_amount_eur
