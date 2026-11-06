@@ -1,2 +1,2 @@
-{{ config(materialized='table', tags=['e2e-schedule-failure']) }}
+{{ config(materialized='table', tags=['hourly']) }}
 SELECT id FROM analytics.ftable_c
