@@ -1,0 +1,7 @@
+version: 2
+
+sources:
+  - name: ingest
+    schema: raw
+    tables:
+      - name: ingest_probe
