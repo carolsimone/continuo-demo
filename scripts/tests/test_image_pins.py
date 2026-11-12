@@ -33,7 +33,7 @@ class RuntimeVersionTest(unittest.TestCase):
         self.assertEqual(image_pins.runtime_version(text), "1.2.3")
 
     def test_refuses_a_tag_that_is_not_an_exact_release(self):
-        for tag in ("latest", "v0.12", "0.12.0", "v0.12.0-test1", "v0.12.0@sha256:" + "a" * 64):
+        for tag in ("latest", "v0.12", "0.12.0", "V0.12.0", "v0.12.0-test1", "v0.12.0@sha256:" + "a" * 64):
             with self.subTest(tag=tag):
                 with self.assertRaisesRegex(image_pins.PinError, r"continuo-python-runtime-<engine>:v<X\.Y\.Z>"):
                     image_pins.runtime_version(f"FROM {_RUNTIME}:{tag}\n")
@@ -127,11 +127,25 @@ class DbtPinsTest(unittest.TestCase):
         self.assertEqual(image_pins.dbt_pins(_DBT_TODAY), {"dbt-core": "1.12.0b1", "dbt-postgres": "1.10.0"})
 
     def test_refuses_a_package_not_pinned_with_double_equals(self):
-        for spec in ("dbt-adapters>=1.24.5", "dbt-adapters", "dbt-adapters~=1.24"):
+        for spec in (
+            "dbt-adapters>=1.24.5",
+            "dbt-adapters",
+            "dbt-adapters~=1.24",
+            "dbt-adapters==1.24.*",
+            "dbt-adapters==${ADAPTERS}",
+        ):
             with self.subTest(spec=spec):
                 with self.assertRaises(image_pins.PinError) as caught:
                     image_pins.dbt_pins(_DBT_TODAY.rstrip("\n") + f' "{spec}"\n')
                 self.assertEqual(str(caught.exception), f"dbt-adapters must be pinned with == (got '{spec}')")
+
+    def test_refuses_a_package_pinned_twice(self):
+        text = _DBT_TODAY.rstrip("\n") + ' "dbt-postgres==1.9.0"\n'
+        with self.assertRaises(image_pins.PinError) as caught:
+            image_pins.dbt_pins(text)
+        self.assertEqual(
+            str(caught.exception), "dbt-postgres is pinned twice (got 'dbt-postgres==1.10.0' and 'dbt-postgres==1.9.0')"
+        )
 
     def test_refuses_a_dockerfile_that_installs_no_dbt(self):
         with self.assertRaisesRegex(image_pins.PinError, "no RUN pip install instruction installs dbt-core"):

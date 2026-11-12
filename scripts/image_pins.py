@@ -27,15 +27,14 @@ log = logging.getLogger("image_pins")
 
 _RUNTIME_IMAGE = "ghcr.io/carolsimone/continuo-python-runtime"
 _RUNTIME_FROM = re.compile(
-    r"^FROM\s+(?:--platform=\S+\s+)?" + re.escape(_RUNTIME_IMAGE) + r"-[a-z0-9]+(?:-[a-z0-9]+)*:v(\d+\.\d+\.\d+)"
-    r"(?:\s+AS\s+\S+)?\s*$",
-    re.IGNORECASE,
+    r"^(?i:FROM)\s+(?:--platform=\S+\s+)?" + re.escape(_RUNTIME_IMAGE) + r"-[a-z0-9]+(?:-[a-z0-9]+)*:v(\d+\.\d+\.\d+)"
+    r"(?:\s+(?i:AS)\s+\S+)?\s*$"
 )
 _INSTALLED_RUNTIME = re.compile(r"^continuo-python-runtime\s+v(\S+)\s*$", re.MULTILINE)
 
 DBT_PACKAGES = ("dbt-core", "dbt-postgres", "dbt-adapters", "dbt-common")
 _PIP_INSTALL = re.compile(r"^RUN\s.*\bpip\s+install\b", re.IGNORECASE)
-_EXACT_PIN = re.compile(r"^==([^=<>~!,;\s]+)$")
+_EXACT_PIN = re.compile(r"^==([A-Za-z0-9][A-Za-z0-9.+!_-]*)$")
 
 
 class PinError(ValueError):
@@ -101,6 +100,7 @@ def dbt_pins(dockerfile_text: str) -> Dict[str, str]:
     if len(installs) > 1:
         raise PinError(f"{len(installs)} RUN pip install instructions install {DBT_PACKAGES[0]}; keep one")
     pins: Dict[str, str] = {}
+    pinned_by: Dict[str, str] = {}
     for token in installs[0]:
         for package in DBT_PACKAGES:
             if not _package_token(token, package):
@@ -108,7 +108,10 @@ def dbt_pins(dockerfile_text: str) -> Dict[str, str]:
             pin = _EXACT_PIN.match(token[len(package):])
             if pin is None:
                 raise PinError(f"{package} must be pinned with == (got '{token}')")
+            if package in pins:
+                raise PinError(f"{package} is pinned twice (got '{pinned_by[package]}' and '{token}')")
             pins[package] = pin.group(1)
+            pinned_by[package] = token
     return pins
 
 
