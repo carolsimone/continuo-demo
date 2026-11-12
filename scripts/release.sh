@@ -69,7 +69,7 @@
 #   REBASELINE       — "true" sends "rebaseline": true together with
 #                      "bootstrap": true, the one release per service that
 #                      continuo's upgrade notes ask for after a hash formula
-#                      change. Continuo promotes it without validation and
+#                      change. continuo promotes it without validation and
 #                      records every seed at its new hash, so no seed reloads.
 #                      A continuo older than rebaseline releases answers 400.
 #                      "false" or unset sends no such field; any other value is
