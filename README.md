@@ -13,7 +13,7 @@ The authoritative contract is continuo's public `/api/v1` API (`POST /api/v1/rel
 Each service is either a **dbt project** (`dbt_project.yml`) or a **python-node service** (a `contracts/` directory instead — see `services/service-py/`). On every push to `services/**` (or manual dispatch), `.github/workflows/release.yml` detects which kind the single changed service is and adapts:
 
 1. **Builds + pushes** the one changed service's image to Docker Hub as `<DOCKERHUB_USERNAME>/<service>:<short-sha>` (+ `:latest`), for both `linux/amd64` and `linux/arm64`. The name/tag is the contract: continuo's executor launches dbt jobs as `<DOCKERHUB_USERNAME>/<service_name>:<image_tag>`. Both architectures are built because the *pulling cluster* decides which one it needs, and a single-architecture image is unpullable everywhere else — an arm64 node rejects an amd64-only manifest with `no matching manifest for linux/arm64`, which is what an Apple Silicon laptop running a local cluster hits. Each service image is **self-contained** — there is no shared base image, so a single-service change rebuilds only that service. Validation runs in a continuo-owned image, so team images carry no validator.
-2. **Python services only**: before the image build, `continuo-runtime lint`/`validate`/`merge` (from [continuo-python-runtime](https://github.com/carolsimone/continuo-python-runtime)) lint the scripts, validate the contracts against the install's postgres dialect, and merge them into the wire `contract.yaml` continuo's manifest side recomputes hashes against. That file is uploaded to `s3://continuo-dev/<service>/<release_id>/contract.yaml` before the release is posted — continuo does no existence check, so the upload must land first.
+2. **Python services only**: before the image build, `continuo-runtime lint`/`validate`/`merge` (from [continuo-python-runtime](https://github.com/carolsimone/continuo-python-runtime)) lint the scripts, validate the contracts against the install's postgres dialect, and merge them into the wire `contract.yaml` continuo's manifest side recomputes hashes against. The CLI version is the one the service's `FROM` line names, and the workflow checks that the installed CLI is that version. That file is uploaded to `s3://continuo-dev/<service>/<release_id>/contract.yaml` before the release is posted — continuo does no existence check, so the upload must land first.
 3. **Drives the release** (`scripts/release.sh`): calls continuo's public API with a bearer token — reads `GET /api/v1/current-prod` to detect bootstrap, `POST`s the candidate to `/api/v1/releases`, then **polls `GET /api/v1/releases/{id}` to a terminal status — failing the deploy on `rejected` or `superseded`**. For a dbt service, continuo compiles the changed service and validates the full topology before promoting; for a python service, continuo parses the uploaded `contract.yaml` instead — there is no compile leg.
 
 In CI the bearer token is the workflow's GitHub Actions OIDC token: the release job sets `permissions: id-token: write`, `release.sh` requests a fresh token for each API call (they expire within minutes) with the origin of `CONTINUO_URL` as its audience, and the repository must be bound to the service in continuo's `ciAuth.bindings`. There is no stored credential to rotate. See [Releasing locally](#releasing-locally) for running `release.sh` from a workstation with your own token.
@@ -57,10 +57,13 @@ The body then carries `"bootstrap": true, "rebaseline": true`. A rebaseline is a
 ```
 services/        # one directory per service.
                  #   dbt service: dbt_project.yml, profiles.yml (schema: analytics),
-                 #     macros/ (generate_schema_name), models/, seeds/, Dockerfile (plain dbt + project)
+                 #     macros/ (generate_schema_name), models/, seeds/, Dockerfile
+                 #     (plain dbt, every dbt package pinned)
                  #   python-node service: contracts/*.yml, scripts/*.py, Dockerfile
-                 #     (FROM ghcr.io/carolsimone/continuo-python-runtime:<tag>)
-scripts/         # repo CD/utility tooling: release.sh, gen_users.py, gen_transactions.py,
+                 #     (FROM ghcr.io/carolsimone/continuo-python-runtime-<engine>:v<version>)
+scripts/         # repo CD/utility tooling: release.sh, image_pins.py (reads the runtime
+                 #   version and checks the dbt pins of a service Dockerfile),
+                 #   gen_users.py, gen_transactions.py,
                  #   gen_fx_rates_eur.py, gen_marketing_spend.py, gen_operational_costs.py
                  #   Seed generators are ordered: gen_users -> {gen_marketing_spend,
                  #   gen_transactions -> gen_fx_rates_eur}; gen_operational_costs is independent.
@@ -108,14 +111,18 @@ An operator token may also bootstrap a service (`FORCE_BOOTSTRAP=true`, or autom
 ```bash
 shellcheck scripts/release.sh
 
-# release.sh against a stub of continuo's release API (needs curl and jq):
-uvx pytest==9.1.1 scripts/tests/test_release_sh.py
+# The tests of release.sh (against a stub of continuo's release API, needs curl
+# and jq), of the image pins and of the workflows:
+uvx pytest==9.1.1 scripts/tests/test_release_sh.py scripts/tests/test_image_pins.py scripts/tests/test_workflows.py
 
-# Python services: lint/validate/merge with continuo-runtime. Pinned exactly
-# (same pin as the release.yml/ci.yml install steps) — move this version only
-# alongside a deliberate runtime upgrade:
-uv tool install continuo-python-runtime==0.6.0 || \
-  uv tool install "git+https://github.com/carolsimone/continuo-python-runtime@v0.6.0"
+# A dbt service: check that its Dockerfile pins every dbt package.
+python3 scripts/image_pins.py check-dbt services/core
+
+# Python services: lint/validate/merge with continuo-runtime. Install the version
+# the service's FROM line names, the same one the workflows install:
+v="$(python3 scripts/image_pins.py runtime-version services/service-py)"
+uv tool install "continuo-python-runtime==${v}" || \
+  uv tool install "git+https://github.com/carolsimone/continuo-python-runtime@v${v}"
 continuo-runtime lint services/service-py/scripts/
 continuo-runtime validate services/service-py/contracts/ --dialect postgres
 continuo-runtime merge services/service-py/contracts/ --service service-py --repo-root services/service-py --dialect postgres --out /tmp/contract.yaml

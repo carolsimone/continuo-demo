@@ -193,16 +193,35 @@ jobs:
         if: needs.detect.outputs.kind == 'python' && needs.detect.outputs.skip_release != 'true'
         uses: astral-sh/setup-uv@v5
 
-      # Pinned deliberately, not left to float: this is a release-gating
-      # install (it computes the hashes continuo's manifest side recomputes
-      # and rejects on mismatch), so a silent republish or an unpinned
-      # git fallback resolving main must never change what it accepts. Move
-      # this pin only alongside a deliberate runtime upgrade.
-      - name: Install continuo-python-runtime
+      # The CLI must be the runtime the service image runs: from runtime 0.12.0
+      # on, the image's harness recomputes at start the hashes this CLI writes
+      # and refuses to run on a mismatch. So the version is read from the
+      # service Dockerfile's FROM line, the one place it is written: a runtime
+      # upgrade is a change to that line alone, and the step after the install
+      # checks that the CLI is that version.
+      - name: Read the runtime version from the service image
+        id: runtime
         if: needs.detect.outputs.kind == 'python' && needs.detect.outputs.skip_release != 'true'
         run: |
-          uv tool install continuo-python-runtime==0.11.0 || \
-            uv tool install "git+https://github.com/carolsimone/continuo-python-runtime@v0.11.0"
+          version="$(python3 scripts/image_pins.py runtime-version "services/${{ needs.detect.outputs.service }}")"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Install continuo-python-runtime
+        if: needs.detect.outputs.kind == 'python' && needs.detect.outputs.skip_release != 'true'
+        env:
+          RUNTIME_VERSION: ${{ steps.runtime.outputs.version }}
+        run: |
+          uv tool install "continuo-python-runtime==${RUNTIME_VERSION}" || \
+            uv tool install "git+https://github.com/carolsimone/continuo-python-runtime@v${RUNTIME_VERSION}"
+
+      - name: Check the installed runtime is the image's
+        if: needs.detect.outputs.kind == 'python' && needs.detect.outputs.skip_release != 'true'
+        # `--color never` keeps forced-colour escapes out of uv's output, and the
+        # output is captured first because GitHub's default shell has no pipefail:
+        # a failing `uv tool list` would otherwise read as "not installed".
+        run: |
+          listed="$(uv tool list --color never)"
+          python3 scripts/image_pins.py check-installed "services/${{ needs.detect.outputs.service }}" <<< "$listed"
 
       # Fast feedback only: this only looks at the service's scripts/. `continuo-runtime
       # merge` (below) independently lints the script plus its whole in-repo import
