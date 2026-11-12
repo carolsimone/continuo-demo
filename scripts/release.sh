@@ -62,9 +62,18 @@
 #   REPO             — "<owner>/<repo>" sent as "repo" (see Authentication).
 #   COMMIT_SHA       — full commit sha sent as "commit_sha".
 #   FORCE_BOOTSTRAP  — "true" to promote without validation regardless of
-#                      current_prod state, re-baselining every node's stored
-#                      content hash (used after continuo changes its hash
-#                      formula). Default: bootstrap only when prod is unseeded.
+#                      current_prod state. After continuo changes its hash
+#                      formula use REBASELINE instead: a bootstrap alone leaves
+#                      every seed whose hash moved to be reloaded. Default:
+#                      bootstrap only when prod is unseeded.
+#   REBASELINE       — "true" sends "rebaseline": true together with
+#                      "bootstrap": true, the one release per service that
+#                      continuo's upgrade notes ask for after a hash formula
+#                      change. Continuo promotes it without validation and
+#                      records every seed at its new hash, so no seed reloads.
+#                      A continuo older than rebaseline releases answers 400.
+#                      "false" or unset sends no such field; any other value is
+#                      refused before the first request.
 #   POLL_TIMEOUT_SECONDS — wall-clock budget, in seconds, for the whole run from
 #                      the first API call: every call, retry and sleep stays
 #                      inside it, and the script exits 1 with "timeout waiting
@@ -100,6 +109,7 @@ KIND="${KIND:-}"
 REPO="${REPO:-}"
 COMMIT_SHA="${COMMIT_SHA:-}"
 FORCE_BOOTSTRAP="${FORCE_BOOTSTRAP:-false}"
+REBASELINE="${REBASELINE:-false}"
 POLL_TIMEOUT_SECONDS="${POLL_TIMEOUT_SECONDS:-900}"
 POLL_INTERVAL="${POLL_INTERVAL:-4}"
 RETRY_DELAY="${RETRY_DELAY:-2}"
@@ -129,6 +139,11 @@ for var in POLL_TIMEOUT_SECONDS POLL_INTERVAL RETRY_DELAY RATE_LIMIT_DELAY; do
   fi
   printf -v "$var" '%d' "$((10#${!var}))"
 done
+
+case "$REBASELINE" in
+  true | false) ;;
+  *) echo "ERROR: REBASELINE must be true or false (got '${REBASELINE}')" >&2; exit 1 ;;
+esac
 
 # A whole-string match: a value with a newline in it is refused.
 RELEASE_ID_RE='^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'
@@ -355,19 +370,25 @@ api_fail() {
   if [ "$HTTP_STATUS" = "403" ] && [ "$code" = "bootstrap_not_allowed" ]; then
     echo "Bootstrapping this service needs an operator token (CONTINUO_TOKEN) or a ciAuth binding with allowBootstrap: true." >&2
   fi
+  if [ "$HTTP_STATUS" = "400" ] && [ "$REBASELINE" = "true" ] && [[ $error == *rebaseline* ]]; then
+    echo "This continuo does not accept rebaseline: upgrade continuo to the release that adds rebaseline releases, then run this release again." >&2
+  fi
 }
 
 echo "Driving release ${RELEASE_ID} (service=${SERVICE}, kind=${KIND:-dbt}, image_tag=${IMAGE_TAG}) against ${BASE_URL}"
 
-# Bootstrap decision, two paths:
+# Bootstrap decision, three paths:
 #   - unseeded prod: GET /api/v1/current-prod returns current_prod_release_id=""
 #     when production has never been seeded — the first release must bootstrap
 #     (promote without validation), since a normal release would be rejected
 #     because every cross-service upstream looks new against empty prod;
-#   - FORCE_BOOTSTRAP=true: deliberate re-baseline of a seeded prod, needed
-#     when continuo changes its content-hash formula and every stored hash
-#     mismatches — a normal release would treat the whole estate as changed
-#     and validate the entire topology.
+#   - FORCE_BOOTSTRAP=true: deliberate promotion of a seeded prod without
+#     validation;
+#   - REBASELINE=true: the release continuo asks for after it changes its
+#     content-hash formula, when every stored hash mismatches — a normal
+#     release would treat the whole estate as changed and validate the entire
+#     topology. A rebaseline is always a bootstrap, and its body also carries
+#     "rebaseline": true so continuo records every seed at its new hash.
 # A failed read stops the run: guessing "unseeded" would turn it into a
 # bootstrap that skips validation.
 api GET /api/v1/current-prod
@@ -376,18 +397,20 @@ if [ "$HTTP_STATUS" != "200" ]; then
   exit 1
 fi
 CUR_ID="$(jq -r '.current_prod_release_id // empty' <<<"$HTTP_BODY")"
-if [ "$FORCE_BOOTSTRAP" = "true" ] || [ -z "$CUR_ID" ]; then BOOTSTRAP=true; else BOOTSTRAP=false; fi
-echo "current_prod release_id='${CUR_ID}' force_bootstrap=${FORCE_BOOTSTRAP} -> bootstrap=${BOOTSTRAP}"
+if [ "$REBASELINE" = "true" ] || [ "$FORCE_BOOTSTRAP" = "true" ] || [ -z "$CUR_ID" ]; then BOOTSTRAP=true; else BOOTSTRAP=false; fi
+echo "current_prod release_id='${CUR_ID}' force_bootstrap=${FORCE_BOOTSTRAP} rebaseline=${REBASELINE} -> bootstrap=${BOOTSTRAP}"
 
 BODY="$(jq -n \
   --arg release_id "$RELEASE_ID" \
   --arg service "$SERVICE" \
   --arg image_tag "$IMAGE_TAG" \
   --argjson bootstrap "$BOOTSTRAP" \
+  --argjson rebaseline "$REBASELINE" \
   --arg kind "$KIND" \
   --arg repo "$REPO" \
   --arg commit_sha "$COMMIT_SHA" \
   '{release_id: $release_id, service: $service, image_tag: $image_tag, bootstrap: $bootstrap}
+   + (if $rebaseline then {rebaseline: true} else {} end)
    + (if $kind == "python" then {kind: "python"} else {} end)
    + (if $repo != "" then {repo: $repo} else {} end)
    + (if $commit_sha != "" then {commit_sha: $commit_sha} else {} end)')"

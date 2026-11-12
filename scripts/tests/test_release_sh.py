@@ -217,6 +217,67 @@ class ReleaseShTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertTrue(json.loads(stub.posts()[0][3])["bootstrap"])
 
+    def test_rebaseline_sends_both_flags_on_a_seeded_prod(self):
+        with _Stub() as stub:
+            result = _run_release(
+                stub,
+                {"REBASELINE": "true", "REPO": "carolsimone/continuo-demo", "COMMIT_SHA": "0123456789abcdef"},
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(
+            json.loads(stub.posts()[0][3]),
+            {
+                "release_id": "rel-1",
+                "service": "svc",
+                "image_tag": "abc1234",
+                "bootstrap": True,
+                "rebaseline": True,
+                "repo": "carolsimone/continuo-demo",
+                "commit_sha": "0123456789abcdef",
+            },
+        )
+        self.assertIn("rebaseline=true -> bootstrap=true", result.stdout)
+
+    def test_python_rebaseline_keeps_the_kind(self):
+        with _Stub() as stub:
+            result = _run_release(
+                stub, {"REBASELINE": "true", "KIND": "python", "IMAGE_TAG": "docker.io/u/service-py:4e5f6a7"}
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        body = json.loads(stub.posts()[0][3])
+        self.assertEqual((body["kind"], body["bootstrap"], body["rebaseline"]), ("python", True, True))
+
+    def test_rebaseline_false_sends_no_rebaseline_field(self):
+        with _Stub() as stub:
+            result = _run_release(stub, {"REBASELINE": "false"})
+
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        body = json.loads(stub.posts()[0][3])
+        self.assertNotIn("rebaseline", body)
+        self.assertFalse(body["bootstrap"])
+
+    def test_an_invalid_rebaseline_value_is_refused_locally(self):
+        for value in ("1", "yes", "True", "true "):
+            with self.subTest(value=value), _Stub() as stub:
+                result = _run_release(stub, {"REBASELINE": value})
+
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("REBASELINE must be true or false", result.stderr)
+                self.assertEqual(stub.requests, [])
+
+    def test_a_continuo_without_rebaseline_explains_the_upgrade(self):
+        refused = {"error": "unknown field(s): rebaseline", "code": "bad_request"}
+        with _Stub(post=(400, refused)) as stub:
+            result = _run_release(stub, {"REBASELINE": "true"})
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("unknown field(s): rebaseline", result.stderr)
+        self.assertIn("upgrade continuo", result.stderr)
+        self.assertEqual(len(stub.posts()), 1)
+        self.assertFalse([r for r in stub.requests if r[1].startswith("/api/v1/releases/")])
+
     def test_failed_current_prod_read_does_not_bootstrap(self):
         error = {"error": "token rejected", "code": "invalid_token"}
         with _Stub(current_prod=(401, error)) as stub:
