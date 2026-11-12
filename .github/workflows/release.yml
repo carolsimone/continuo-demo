@@ -11,13 +11,16 @@ name: release
 # token, so the release job needs `id-token: write` and the repository must be
 # bound in continuo's `ciAuth.bindings`.
 #
-# Manual dispatch releases a named service at the current main HEAD, and can
-# force a bootstrap (promote without validation, re-baselining the whole
-# estate's content hashes) — needed after continuo changes its hash formula,
-# when every stored hash mismatches and a normal release would validate the
-# entire topology. A bootstrap from this workflow is refused by continuo unless
-# the repository's binding sets `allowBootstrap: true`; otherwise it needs an
-# operator token (see scripts/release.sh).
+# Manual dispatch releases a named service at the current main HEAD. It can
+# force a bootstrap (promote without validation), or a rebaseline: a bootstrap
+# that also records every seed at its new content hash, so nothing validates and
+# no seed reloads. A rebaseline is the one release per service that continuo's
+# upgrade notes ask for after continuo changes its hash formula, when a normal
+# release would validate the whole topology and reload every seed. Run one
+# dispatch at a time: the concurrency group keeps one waiting run, and a newer
+# run cancels it. continuo refuses a bootstrap or a rebaseline from this
+# workflow unless the repository's binding sets `allowBootstrap: true`;
+# otherwise it needs an operator token (see scripts/release.sh).
 on:
   push:
     branches: [main]
@@ -31,7 +34,12 @@ on:
         required: true
         type: string
       force_bootstrap:
-        description: "Promote without validation and re-baseline the whole estate's content hashes"
+        description: "Promote without validation. After continuo changes its hash formula, use rebaseline instead"
+        required: false
+        default: false
+        type: boolean
+      rebaseline:
+        description: "Re-baseline after continuo changes its hash formula: a bootstrap that also records every seed at its new hash (implies force_bootstrap)"
         required: false
         default: false
         type: boolean
@@ -81,7 +89,7 @@ jobs:
             # A service is python iff it declares contracts/ (a python-node
             # service directory); every other service is a dbt project.
             if [ -d "services/${SERVICE}/contracts" ]; then KIND="python"; else KIND="dbt"; fi
-            echo "Dispatched release: ${SERVICE} @ ${SHA} (kind=${KIND}, force_bootstrap=${{ inputs.force_bootstrap }})"
+            echo "Dispatched release: ${SERVICE} @ ${SHA} (kind=${KIND}, force_bootstrap=${{ inputs.force_bootstrap }}, rebaseline=${{ inputs.rebaseline }})"
             echo "skip=false" >> "$GITHUB_OUTPUT"
             echo "skip_release=false" >> "$GITHUB_OUTPUT"
             echo "tag=${SHA}" >> "$GITHUB_OUTPUT"
@@ -301,4 +309,7 @@ jobs:
           COMMIT_SHA: ${{ github.sha }}
           # Renders 'false' on push events, where inputs is empty.
           FORCE_BOOTSTRAP: ${{ inputs.force_bootstrap == true }}
+          # Renders 'false' on push events too. release.sh sends a rebaseline
+          # as a bootstrap.
+          REBASELINE: ${{ inputs.rebaseline == true }}
         run: bash scripts/release.sh

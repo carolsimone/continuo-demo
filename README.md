@@ -40,6 +40,18 @@ For a python service the body gains one field, and `image_tag` is a full pullabl
 
 `release.sh` sets `bootstrap:true` automatically when `GET /current-prod` reports no current release (`current_prod_release_id` empty). A bootstrap release **promotes without validation** — necessary because, against an empty `current_prod`, normal validation rejects every cross-service upstream as new. Every subsequent run posts `bootstrap:false` and goes through validation. (Bootstrap promotes whatever topology it carries, so the first push must be a trusted one.) Bootstrapping a service is an operator action: a CI token may bootstrap only when the repository's `ciAuth.bindings` entry sets `allowBootstrap: true`, and a binding without it answers `403` `bootstrap_not_allowed`. The usual setup is to bootstrap each service once with an operator token (see [Releasing locally](#releasing-locally)) and leave `allowBootstrap: false` for CI.
 
+#### Re-baseline after continuo changes its hash formula
+
+When continuo changes its hash formula, every stored hash stops matching. A normal release would then validate the whole estate and reload every seed. continuo's upgrade notes ask for one `rebaseline` release per service instead, while producers freeze their merges.
+
+Run it once per service, one run at a time (the concurrency group keeps one waiting run):
+
+```bash
+gh workflow run release.yml -f service=<svc> -f rebaseline=true
+```
+
+The body then carries `"bootstrap": true, "rebaseline": true`. A rebaseline is a bootstrap, so the repository's binding must allow bootstrap, or you use an operator token. A continuo older than rebaseline releases answers `400` with `unknown field(s): rebaseline`, and nothing is released.
+
 ## Repo layout
 
 ```
@@ -89,7 +101,7 @@ RELEASE_ID=rel-local-$(date +%s) SERVICE=service-3 IMAGE_TAG=<tag> \
   REPO=<owner>/<repo> COMMIT_SHA=$(git rev-parse HEAD) bash scripts/release.sh
 ```
 
-An operator token may also bootstrap a service (`FORCE_BOOTSTRAP=true`, or automatically against an unseeded production).
+An operator token may also bootstrap a service (`FORCE_BOOTSTRAP=true`, or automatically against an unseeded production). `REBASELINE=true` sends a rebaseline.
 
 ## Local checks
 
