@@ -35,7 +35,11 @@ class RuntimeVersionWiringTest(unittest.TestCase):
         for name, text in (("release.yml", _RELEASE), ("ci.yml", _CI)):
             with self.subTest(workflow=name):
                 self.assertIn("python3 scripts/image_pins.py runtime-version", text)
-                self.assertIn("python3 scripts/image_pins.py check-installed", text)
+                self.assertIn('listed="$(uv tool list --color never)"', text)
+                self.assertRegex(
+                    text,
+                    r'python3 scripts/image_pins\.py check-installed "services/[^"]+" <<< "\$listed"',
+                )
 
 
 class CiChecksTest(unittest.TestCase):
