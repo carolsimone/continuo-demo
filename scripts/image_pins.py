@@ -19,8 +19,9 @@ from __future__ import annotations
 import argparse
 import logging
 import re
+import pathlib
 import sys
-from typing import List, Optional, TextIO
+from typing import Dict, List, Optional, TextIO, Tuple, Union
 
 log = logging.getLogger("image_pins")
 
@@ -31,6 +32,10 @@ _RUNTIME_FROM = re.compile(
     re.IGNORECASE,
 )
 _INSTALLED_RUNTIME = re.compile(r"^continuo-python-runtime\s+v(\S+)\s*$", re.MULTILINE)
+
+DBT_PACKAGES = ("dbt-core", "dbt-postgres", "dbt-adapters", "dbt-common")
+_PIP_INSTALL = re.compile(r"^RUN\s.*\bpip\s+install\b", re.IGNORECASE)
+_EXACT_PIN = re.compile(r"^==([^=<>~!,;\s]+)$")
 
 
 class PinError(ValueError):
@@ -59,6 +64,90 @@ def installed_runtime_version(uv_tool_list: str) -> Optional[str]:
     """The version on the `continuo-python-runtime vX.Y.Z` line of `uv tool list`, or None."""
     match = _INSTALLED_RUNTIME.search(uv_tool_list)
     return match.group(1) if match else None
+
+
+def _instructions(dockerfile_text: str) -> List[str]:
+    """The instructions of a Dockerfile, each line ending in a backslash joined to the next."""
+    instructions: List[str] = []
+    pending = ""
+    for raw in dockerfile_text.splitlines():
+        line = raw.replace("\r", "").strip()
+        if line.endswith("\\"):
+            pending += line[:-1].rstrip() + " "
+            continue
+        instructions.append((pending + line).strip())
+        pending = ""
+    if pending:
+        instructions.append(pending.strip())
+    return instructions
+
+
+def _package_token(token: str, package: str) -> bool:
+    """Whether a pip argument names the package, alone or with a version specifier."""
+    return re.match(re.escape(package) + r"(?:[=<>~!]|$)", token) is not None
+
+
+def dbt_pins(dockerfile_text: str) -> Dict[str, str]:
+    """The version of each dbt package the dbt `RUN pip install` instruction pins with ==."""
+    installs = []
+    for instruction in _instructions(dockerfile_text):
+        if not _PIP_INSTALL.match(instruction):
+            continue
+        tokens = [word.strip("\"'") for word in instruction.split()]
+        if any(_package_token(token, DBT_PACKAGES[0]) for token in tokens):
+            installs.append(tokens)
+    if not installs:
+        raise PinError(f"no RUN pip install instruction installs {DBT_PACKAGES[0]}")
+    if len(installs) > 1:
+        raise PinError(f"{len(installs)} RUN pip install instructions install {DBT_PACKAGES[0]}; keep one")
+    pins: Dict[str, str] = {}
+    for token in installs[0]:
+        for package in DBT_PACKAGES:
+            if not _package_token(token, package):
+                continue
+            pin = _EXACT_PIN.match(token[len(package):])
+            if pin is None:
+                raise PinError(f"{package} must be pinned with == (got '{token}')")
+            pins[package] = pin.group(1)
+    return pins
+
+
+def _dbt_service_report(service_dir: Union[pathlib.Path, str]) -> Tuple[List[str], Dict[str, str]]:
+    """The problems of a dbt service's Dockerfiles, and the pins of its Dockerfile."""
+    dockerfile = f"{service_dir}/Dockerfile"
+    local = f"{service_dir}/Dockerfile.local"
+    text = _read_dockerfile(dockerfile)
+    if text is None:
+        return [f"{dockerfile}: no such file"], {}
+    files = [(dockerfile, text)]
+    local_text = _read_dockerfile(local)
+    if local_text is not None:
+        files.append((local, local_text))
+
+    problems: List[str] = []
+    pins_by_path: Dict[str, Dict[str, str]] = {}
+    for path, file_text in files:
+        try:
+            pins = dbt_pins(file_text)
+        except PinError as err:
+            problems.append(f"{path}: {err}")
+            continue
+        pins_by_path[path] = pins
+        for package in DBT_PACKAGES:
+            if package not in pins:
+                problems.append(f'{path}: {package} is not pinned (add "{package}==<version>")')
+    if dockerfile in pins_by_path and local in pins_by_path:
+        for package in DBT_PACKAGES:
+            wanted = pins_by_path[dockerfile].get(package)
+            found = pins_by_path[local].get(package)
+            if wanted is not None and found is not None and wanted != found:
+                problems.append(f"{local} pins {package}=={found} but {dockerfile} pins {package}=={wanted}")
+    return problems, pins_by_path.get(dockerfile, {})
+
+
+def check_dbt_service(service_dir: Union[pathlib.Path, str]) -> List[str]:
+    """The problems of <dir>/Dockerfile and, when present, <dir>/Dockerfile.local; empty when the service passes."""
+    return _dbt_service_report(service_dir)[0]
 
 
 def _read_dockerfile(path: str) -> Optional[str]:
@@ -112,6 +201,16 @@ def _cmd_check_installed(service_dir: str, stdin: TextIO) -> int:
     return 0
 
 
+def _cmd_check_dbt(service_dir: str) -> int:
+    problems, pins = _dbt_service_report(service_dir)
+    if problems:
+        for problem in problems:
+            log.error("%s", problem)
+        return 1
+    log.info("%s pins %s", service_dir, " ".join(f"{package}=={pins[package]}" for package in DBT_PACKAGES))
+    return 0
+
+
 def main(
     argv: Optional[List[str]] = None,
     stdin: Optional[TextIO] = None,
@@ -123,6 +222,7 @@ def main(
     for name, help_text in (
         ("runtime-version", "print the continuo-python-runtime version the FROM line names"),
         ("check-installed", "check the installed continuo-python-runtime (uv tool list on stdin) against the FROM line"),
+        ("check-dbt", "check that the Dockerfiles pin every dbt package with == to the same versions"),
     ):
         command = commands.add_parser(name, help=help_text, description=help_text)
         command.add_argument("service_dir", help="the service directory that holds the Dockerfile")
@@ -130,6 +230,8 @@ def main(
 
     if args.command == "runtime-version":
         return _cmd_runtime_version(args.service_dir, stdout if stdout is not None else sys.stdout)
+    if args.command == "check-dbt":
+        return _cmd_check_dbt(args.service_dir)
     return _cmd_check_installed(args.service_dir, stdin if stdin is not None else sys.stdin)
 
 

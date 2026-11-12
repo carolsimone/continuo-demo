@@ -99,3 +99,84 @@ class RuntimeCommandsTest(unittest.TestCase):
             code = image_pins.main(["check-installed", str(service)], stdin=io.StringIO("No tools installed\n"))
         self.assertEqual(code, 1)
         self.assertIn("continuo-python-runtime is not installed", logs.output[0])
+
+
+_DBT = (
+    "FROM python:3.12-slim\n"
+    'RUN pip install --no-cache-dir "dbt-core==1.12.0b1" "dbt-postgres==1.10.0" '
+    '"dbt-adapters==1.24.5" "dbt-common==1.39.0"\n'
+)
+_DBT_TODAY = 'FROM python:3.12-slim\nRUN pip install --no-cache-dir "dbt-core==1.12.0b1" "dbt-postgres==1.10.0"\n'
+_PINS = {"dbt-core": "1.12.0b1", "dbt-postgres": "1.10.0", "dbt-adapters": "1.24.5", "dbt-common": "1.39.0"}
+
+
+class DbtPinsTest(unittest.TestCase):
+    def test_reads_every_pinned_dbt_package(self):
+        self.assertEqual(image_pins.dbt_pins(_DBT), _PINS)
+
+    def test_reads_an_instruction_continued_over_several_lines(self):
+        text = (
+            "RUN pip install --no-cache-dir \\\r\n"
+            "    dbt-core==1.12.0b1 \\\n"
+            '    "dbt-postgres==1.10.0" \\\n'
+            "    'dbt-adapters==1.24.5' dbt-common==1.39.0\n"
+        )
+        self.assertEqual(image_pins.dbt_pins(text), _PINS)
+
+    def test_leaves_out_a_package_the_instruction_does_not_install(self):
+        self.assertEqual(image_pins.dbt_pins(_DBT_TODAY), {"dbt-core": "1.12.0b1", "dbt-postgres": "1.10.0"})
+
+    def test_refuses_a_package_not_pinned_with_double_equals(self):
+        for spec in ("dbt-adapters>=1.24.5", "dbt-adapters", "dbt-adapters~=1.24"):
+            with self.subTest(spec=spec):
+                with self.assertRaises(image_pins.PinError) as caught:
+                    image_pins.dbt_pins(_DBT_TODAY.rstrip("\n") + f' "{spec}"\n')
+                self.assertEqual(str(caught.exception), f"dbt-adapters must be pinned with == (got '{spec}')")
+
+    def test_refuses_a_dockerfile_that_installs_no_dbt(self):
+        with self.assertRaisesRegex(image_pins.PinError, "no RUN pip install instruction installs dbt-core"):
+            image_pins.dbt_pins("FROM python:3.12-slim\nRUN pip install --no-cache-dir pyyaml==6.0.3\n")
+
+
+class CheckDbtServiceTest(unittest.TestCase):
+    def test_a_service_whose_dockerfiles_pin_the_same_versions_passes(self):
+        self.assertEqual(image_pins.check_dbt_service(_service_dir(Dockerfile=_DBT, Dockerfile_local=_DBT)), [])
+
+    def test_reports_each_missing_pin_of_each_dockerfile(self):
+        service = _service_dir(Dockerfile=_DBT_TODAY, Dockerfile_local=_DBT_TODAY)
+        self.assertEqual(
+            image_pins.check_dbt_service(service),
+            [
+                f'{service}/Dockerfile: dbt-adapters is not pinned (add "dbt-adapters==<version>")',
+                f'{service}/Dockerfile: dbt-common is not pinned (add "dbt-common==<version>")',
+                f'{service}/Dockerfile.local: dbt-adapters is not pinned (add "dbt-adapters==<version>")',
+                f'{service}/Dockerfile.local: dbt-common is not pinned (add "dbt-common==<version>")',
+            ],
+        )
+
+    def test_reports_dockerfiles_that_disagree(self):
+        local = _DBT.replace("dbt-adapters==1.24.5", "dbt-adapters==1.24.4")
+        service = _service_dir(Dockerfile=_DBT, Dockerfile_local=local)
+        self.assertEqual(
+            image_pins.check_dbt_service(service),
+            [f"{service}/Dockerfile.local pins dbt-adapters==1.24.4 but {service}/Dockerfile pins dbt-adapters==1.24.5"],
+        )
+
+    def test_a_service_without_a_dockerfile_fails(self):
+        service = _service_dir(Dockerfile_local=_DBT)
+        self.assertEqual(image_pins.check_dbt_service(service), [f"{service}/Dockerfile: no such file"])
+
+    def test_check_dbt_logs_the_pins_and_passes(self):
+        service = _service_dir(Dockerfile=_DBT)
+        with self.assertLogs("image_pins", "INFO") as logs:
+            self.assertEqual(image_pins.main(["check-dbt", str(service)]), 0)
+        self.assertIn(
+            f"{service} pins dbt-core==1.12.0b1 dbt-postgres==1.10.0 dbt-adapters==1.24.5 dbt-common==1.39.0",
+            logs.output[-1],
+        )
+
+    def test_check_dbt_logs_every_problem_and_fails(self):
+        service = _service_dir(Dockerfile=_DBT_TODAY)
+        with self.assertLogs("image_pins", "ERROR") as logs:
+            self.assertEqual(image_pins.main(["check-dbt", str(service)]), 1)
+        self.assertEqual(len(logs.output), 2)
