@@ -203,6 +203,32 @@ class ReleaseShTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertEqual(json.loads(stub.posts()[0][3])["kind"], "python")
 
+    def test_python_odcs_kind_adds_kind_to_the_body(self):
+        with _Stub() as stub:
+            result = _run_release(stub, {"KIND": "python-odcs"})
+
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(json.loads(stub.posts()[0][3])["kind"], "python-odcs")
+
+    def test_an_unknown_kind_stops_the_script(self):
+        for value in ("pythn", "Python", "python-odcs ", "odcs"):
+            with self.subTest(kind=value), _Stub() as stub:
+                result = _run_release(stub, {"KIND": value})
+
+                self.assertEqual(result.returncode, 2)
+                self.assertIn(
+                    f'release.sh: unknown KIND "{value}": expected dbt, python or python-odcs',
+                    result.stderr,
+                )
+                self.assertEqual(stub.requests, [])
+
+    def test_dbt_kind_sends_no_kind_field(self):
+        with _Stub() as stub:
+            result = _run_release(stub, {"KIND": "dbt"})
+
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertNotIn("kind", json.loads(stub.posts()[0][3]))
+
     def test_unseeded_prod_bootstraps(self):
         with _Stub(current_prod=(200, {"current_prod_release_id": ""})) as stub:
             result = _run_release(stub)
@@ -248,6 +274,16 @@ class ReleaseShTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         body = json.loads(stub.posts()[0][3])
         self.assertEqual((body["kind"], body["bootstrap"], body["rebaseline"]), ("python", True, True))
+
+    def test_python_odcs_rebaseline_keeps_the_kind(self):
+        with _Stub() as stub:
+            result = _run_release(
+                stub, {"REBASELINE": "true", "KIND": "python-odcs", "IMAGE_TAG": "docker.io/u/service-py:4e5f6a7"}
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        body = json.loads(stub.posts()[0][3])
+        self.assertEqual((body["kind"], body["bootstrap"], body["rebaseline"]), ("python-odcs", True, True))
 
     def test_rebaseline_false_sends_no_rebaseline_field(self):
         with _Stub() as stub:
@@ -304,6 +340,35 @@ class ReleaseShTest(unittest.TestCase):
         self.assertIn("validation_failed", output)
         self.assertIn("ltv_per_user reads a column that no longer exists", output)
         self.assertIn(rejected["ui_url"], output)
+
+    def test_a_rejected_release_prints_the_contracts_version(self):
+        rejected = {
+            "release_id": "rel-4e5f6a7-213",
+            "service": "service-py",
+            "status": "rejected",
+            "terminal": True,
+            "bootstrap": False,
+            "repo": "carolsimone/continuo-demo",
+            "commit_sha": "4e5f6a7",
+            "reject_reason": "invalid_contract",
+            "reject_detail": "1 node failed to parse: analytics.py_daily_kpis",
+            "ui_url": "https://continuo.example/releases/rel-4e5f6a7-213",
+            "continuo_contracts": "0.2.0",
+        }
+        with _Stub(polls=[(200, rejected)]) as stub:
+            result = _run_release(stub, {"KIND": "python-odcs"})
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("reject_reason: invalid_contract", result.stderr)
+        self.assertIn("continuo_contracts: 0.2.0", result.stderr)
+
+    def test_a_rejection_without_a_contracts_version_prints_the_empty_line(self):
+        rejected = {"release_id": "rel-1", "status": "rejected", "terminal": True, "reject_reason": "validation_failed"}
+        with _Stub(polls=[(200, rejected)]) as stub:
+            result = _run_release(stub)
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("continuo_contracts: \n", result.stderr)
 
     def test_superseded_release_fails(self):
         superseded = {"release_id": "rel-1", "status": "superseded", "terminal": True}
