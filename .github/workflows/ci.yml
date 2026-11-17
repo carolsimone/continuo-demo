@@ -64,7 +64,8 @@ jobs:
   # Python services skip dbt entirely, so nothing above exercises their
   # contracts or scripts. Run the same gate release.yml runs before it ever
   # builds an image, so a broken contract/script fails the PR instead of the
-  # push-to-main release.
+  # push-to-main release. A python-odcs service also gets a dry run of the
+  # `pack` release.yml runs after the build.
   python-checks:
     needs: check-single-service
     if: startsWith(needs.check-single-service.outputs.kind, 'python')

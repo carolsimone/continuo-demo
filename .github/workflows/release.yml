@@ -227,8 +227,9 @@ jobs:
           python3 scripts/image_pins.py check-installed "services/${{ needs.detect.outputs.service }}" <<< "$listed"
 
       # Fast feedback only: this only looks at the service's scripts/. `continuo-runtime
-      # merge` (below) independently lints the script plus its whole in-repo import
-      # closure, so a helper outside scripts/ is still covered.
+      # merge` (python) or `pack` (python-odcs), below, independently lints the script
+      # plus its whole in-repo import closure, so a helper outside scripts/ is still
+      # covered.
       - name: Lint python scripts (no hand-written SQL)
         if: startsWith(needs.detect.outputs.kind, 'python') && needs.detect.outputs.skip_release != 'true'
         run: continuo-runtime lint "services/${{ needs.detect.outputs.service }}/scripts"

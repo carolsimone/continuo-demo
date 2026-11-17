@@ -124,6 +124,20 @@ class PythonOdcsKindTest(unittest.TestCase):
             _step(_RELEASE, _POST),
         )
 
+    def test_the_post_sends_the_kind(self):
+        self.assertIn("          KIND: ${{ needs.detect.outputs.kind }}\n", _step(_RELEASE, _POST))
+
+    def test_the_post_and_the_odcs_steps_carry_no_status_function(self):
+        # A step with no status function has an implicit success(): a failed pack stops
+        # the upload and the POST, and a failed upload stops the POST.
+        post = _step(_RELEASE, _POST)
+        self.assertIn("\n        if: needs.detect.outputs.skip_release != 'true'\n", post)
+        for name in (_PACK, _UPLOAD_BUNDLE, _POST):
+            with self.subTest(step=name):
+                step = _step(_RELEASE, name)
+                for function in ("always()", "failure()", "cancelled()"):
+                    self.assertNotIn(function, step)
+
     def test_the_merge_and_the_contract_upload_stay_python_only(self):
         for name in ("Merge python contracts", "Upload contract.yaml to S3"):
             with self.subTest(step=name):
@@ -201,7 +215,7 @@ class PythonOdcsKindTest(unittest.TestCase):
             '            --out "${RUNNER_TEMP}/odcs-bundle.json"\n',
             step,
         )
-        # It is the last step of python-checks, after the validate, and CI builds no
+        # It comes after the validate and before the dbt-checks job, and CI builds no
         # image and reaches no storage.
         validate = _position(_CI, "Validate python contracts")
         dry_run = _position(_CI, _PACK_DRY_RUN)
