@@ -86,9 +86,10 @@ jobs:
             if [ ! -d "services/${SERVICE}" ]; then
               echo "::error::unknown service '${SERVICE}' — no services/${SERVICE}/ directory"; exit 1
             fi
-            # A service is python iff it declares contracts/ (a python-node
+            # A service is python-odcs iff its contracts/ holds *.odcs.yaml files,
+            # python iff it declares contracts/ without them (a python-node
             # service directory); every other service is a dbt project.
-            if [ -d "services/${SERVICE}/contracts" ]; then KIND="python"; else KIND="dbt"; fi
+            if compgen -G "services/${SERVICE}/contracts/*.odcs.yaml" > /dev/null; then KIND="python-odcs"; elif [ -d "services/${SERVICE}/contracts" ]; then KIND="python"; else KIND="dbt"; fi
             echo "Dispatched release: ${SERVICE} @ ${SHA} (kind=${KIND}, force_bootstrap=${{ inputs.force_bootstrap }}, rebaseline=${{ inputs.rebaseline }})"
             echo "skip=false" >> "$GITHUB_OUTPUT"
             echo "skip_release=false" >> "$GITHUB_OUTPUT"
@@ -134,9 +135,10 @@ jobs:
 
           # Exactly one service changed → normal single-service release.
           SERVICE="$(printf '%s' "$CHANGED" | cut -d/ -f2)"
-          # A service is python iff it declares contracts/ (a python-node
+          # A service is python-odcs iff its contracts/ holds *.odcs.yaml files,
+          # python iff it declares contracts/ without them (a python-node
           # service directory); every other service is a dbt project.
-          if [ -d "services/${SERVICE}/contracts" ]; then KIND="python"; else KIND="dbt"; fi
+          if compgen -G "services/${SERVICE}/contracts/*.odcs.yaml" > /dev/null; then KIND="python-odcs"; elif [ -d "services/${SERVICE}/contracts" ]; then KIND="python"; else KIND="dbt"; fi
           echo "Changed service: ${SERVICE} @ ${SHA} (kind=${KIND})"
 
           echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -186,11 +188,12 @@ jobs:
       # A python-node service (services/<svc>/contracts/) goes through the
       # continuo-python-runtime CLI before the image build: lint the scripts,
       # validate the contracts against the install's warehouse dialect, then
-      # merge them into the wire artifact continuo's manifest side recomputes
-      # hashes against. dbt services skip all of this — their compile leg
-      # runs inside continuo itself.
+      # merge them (python) into the wire artifact continuo's manifest side
+      # recomputes hashes against, or pack them (python-odcs, once the image
+      # is pushed) into the ODCS bundle. dbt services skip all of this — their
+      # compile leg runs inside continuo itself.
       - name: Set up uv
-        if: needs.detect.outputs.kind == 'python' && needs.detect.outputs.skip_release != 'true'
+        if: startsWith(needs.detect.outputs.kind, 'python') && needs.detect.outputs.skip_release != 'true'
         uses: astral-sh/setup-uv@v5
 
       # The CLI must be the runtime the service image runs: from runtime 0.12.0
@@ -201,13 +204,13 @@ jobs:
       # checks that the CLI is that version.
       - name: Read the runtime version from the service image
         id: runtime
-        if: needs.detect.outputs.kind == 'python' && needs.detect.outputs.skip_release != 'true'
+        if: startsWith(needs.detect.outputs.kind, 'python') && needs.detect.outputs.skip_release != 'true'
         run: |
           version="$(python3 scripts/image_pins.py runtime-version "services/${{ needs.detect.outputs.service }}")"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Install continuo-python-runtime
-        if: needs.detect.outputs.kind == 'python' && needs.detect.outputs.skip_release != 'true'
+        if: startsWith(needs.detect.outputs.kind, 'python') && needs.detect.outputs.skip_release != 'true'
         env:
           RUNTIME_VERSION: ${{ steps.runtime.outputs.version }}
         run: |
@@ -215,7 +218,7 @@ jobs:
             uv tool install "git+https://github.com/carolsimone/continuo-python-runtime@v${RUNTIME_VERSION}"
 
       - name: Check the installed runtime is the image's
-        if: needs.detect.outputs.kind == 'python' && needs.detect.outputs.skip_release != 'true'
+        if: startsWith(needs.detect.outputs.kind, 'python') && needs.detect.outputs.skip_release != 'true'
         # `--color never` keeps forced-colour escapes out of uv's output, and the
         # output is captured first because GitHub's default shell has no pipefail:
         # a failing `uv tool list` would otherwise read as "not installed".
@@ -227,13 +230,13 @@ jobs:
       # merge` (below) independently lints the script plus its whole in-repo import
       # closure, so a helper outside scripts/ is still covered.
       - name: Lint python scripts (no hand-written SQL)
-        if: needs.detect.outputs.kind == 'python' && needs.detect.outputs.skip_release != 'true'
+        if: startsWith(needs.detect.outputs.kind, 'python') && needs.detect.outputs.skip_release != 'true'
         run: continuo-runtime lint "services/${{ needs.detect.outputs.service }}/scripts"
 
       # --dialect postgres checks each declared read against the install's own
       # warehouse dialect, not just sqlglot's dialect-neutral grammar.
       - name: Validate python contracts
-        if: needs.detect.outputs.kind == 'python' && needs.detect.outputs.skip_release != 'true'
+        if: startsWith(needs.detect.outputs.kind, 'python') && needs.detect.outputs.skip_release != 'true'
         run: continuo-runtime validate "services/${{ needs.detect.outputs.service }}/contracts" --dialect postgres
 
       # --repo-root is the SERVICE's own directory, not the monorepo root: each
@@ -291,7 +294,7 @@ jobs:
       # must be the full pullable registry ref, not just the tag the build
       # step above already pushed under.
       - name: Compose full image ref for python release
-        if: needs.detect.outputs.kind == 'python' && needs.detect.outputs.skip_release != 'true'
+        if: startsWith(needs.detect.outputs.kind, 'python') && needs.detect.outputs.skip_release != 'true'
         run: |
           echo "PYTHON_IMAGE_TAG=docker.io/${DOCKERHUB_USERNAME}/${{ needs.detect.outputs.service }}:${{ needs.detect.outputs.tag }}" >> "$GITHUB_ENV"
 
@@ -312,6 +315,34 @@ jobs:
             --endpoint-url https://nbg1.your-objectstorage.com \
             --region eu-central-1
 
+      # --image is the full ref composed above, so this runs after the image
+      # is pushed. --repo-root is the SERVICE's own directory, as for the merge
+      # above.
+      - name: Pack the ODCS bundle
+        if: needs.detect.outputs.kind == 'python-odcs' && needs.detect.outputs.skip_release != 'true'
+        run: |
+          continuo-runtime pack "services/${{ needs.detect.outputs.service }}/contracts" \
+            --service "${{ needs.detect.outputs.service }}" \
+            --repo-root "services/${{ needs.detect.outputs.service }}" \
+            --dialect postgres \
+            --image "${PYTHON_IMAGE_TAG}" \
+            --out "${RUNNER_TEMP}/odcs-bundle.json"
+
+      # The boundary contract requires this upload to complete before the
+      # POST below: continuo does no existence check, so a POST racing its
+      # own upload fails at the parsing stage. Endpoint/bucket/region are the
+      # ones of the contract.yaml upload above.
+      - name: Upload odcs-bundle.json to S3
+        if: needs.detect.outputs.kind == 'python-odcs' && needs.detect.outputs.skip_release != 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
+        run: |
+          aws s3 cp "${RUNNER_TEMP}/odcs-bundle.json" \
+            "s3://continuo-dev/${{ needs.detect.outputs.service }}/${{ needs.detect.outputs.release_id }}/odcs-bundle.json" \
+            --endpoint-url https://nbg1.your-objectstorage.com \
+            --region eu-central-1
+
       - name: Drive the release through continuo
         if: needs.detect.outputs.skip_release != 'true'
         env:
@@ -322,7 +353,7 @@ jobs:
           # dbt keeps the bare short sha continuo composes into a pull ref
           # itself; python carries the full ref composed above, since
           # continuo runs a python image_tag verbatim.
-          IMAGE_TAG: ${{ needs.detect.outputs.kind == 'python' && env.PYTHON_IMAGE_TAG || needs.detect.outputs.image_tag }}
+          IMAGE_TAG: ${{ startsWith(needs.detect.outputs.kind, 'python') && env.PYTHON_IMAGE_TAG || needs.detect.outputs.image_tag }}
           KIND: ${{ needs.detect.outputs.kind }}
           REPO: ${{ github.repository }}
           COMMIT_SHA: ${{ github.sha }}

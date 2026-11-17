@@ -51,11 +51,12 @@ jobs:
 
           if [ "$COUNT" -eq 1 ]; then
             SERVICE="$(printf '%s' "$CHANGED" | cut -d/ -f2)"
-            # A service is python iff it declares contracts/ (a python-node
-            # service directory); every other service is a dbt project. This
-            # mirrors release.yml's own detect job so a PR is checked the same
-            # way its eventual release would be.
-            if [ -d "services/${SERVICE}/contracts" ]; then KIND="python"; else KIND="dbt"; fi
+            # A service is python-odcs iff its contracts/ holds *.odcs.yaml
+            # files, python iff it declares contracts/ without them (a
+            # python-node service directory); every other service is a dbt
+            # project. This mirrors release.yml's own detect job so a PR is
+            # checked the same way its eventual release would be.
+            if compgen -G "services/${SERVICE}/contracts/*.odcs.yaml" > /dev/null; then KIND="python-odcs"; elif [ -d "services/${SERVICE}/contracts" ]; then KIND="python"; else KIND="dbt"; fi
             echo "service=${SERVICE}" >> "$GITHUB_OUTPUT"
             echo "kind=${KIND}" >> "$GITHUB_OUTPUT"
           fi
@@ -66,7 +67,7 @@ jobs:
   # push-to-main release.
   python-checks:
     needs: check-single-service
-    if: needs.check-single-service.outputs.kind == 'python'
+    if: startsWith(needs.check-single-service.outputs.kind, 'python')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -110,6 +111,22 @@ jobs:
 
       - name: Validate python contracts
         run: continuo-runtime validate "services/${{ needs.check-single-service.outputs.service }}/contracts" --dialect postgres
+
+      # A dry run: CI builds no image, so the pack gets an empty package
+      # listing (--image-packages) where the release's pack gets the pushed
+      # image (--image). It writes a bundle nothing reads and reaches no object
+      # storage; it only surfaces a pack failure on the PR rather than in the
+      # release.
+      - name: Dry-run the ODCS bundle pack
+        if: needs.check-single-service.outputs.kind == 'python-odcs'
+        run: |
+          echo '{}' > "${RUNNER_TEMP}/packages.json"
+          continuo-runtime pack "services/${{ needs.check-single-service.outputs.service }}/contracts" \
+            --service "${{ needs.check-single-service.outputs.service }}" \
+            --repo-root "services/${{ needs.check-single-service.outputs.service }}" \
+            --dialect postgres \
+            --image-packages "${RUNNER_TEMP}/packages.json" \
+            --out "${RUNNER_TEMP}/odcs-bundle.json"
 
   # A dbt image pins every dbt package, so a rebuild cannot change the macros
   # dbt runs without a reviewed change to its Dockerfile.
