@@ -80,12 +80,10 @@ def _position(text, name):
 
 _ODCS_DETECT = (
     'if compgen -G "services/${SERVICE}/contracts/*.odcs.yaml" > /dev/null; then KIND="python-odcs"; '
-    'elif [ -d "services/${SERVICE}/contracts" ]; then KIND="python"; else KIND="dbt"; fi'
+    'else KIND="dbt"; fi'
 )
-_BOTH_PYTHON_KINDS = "startsWith(needs.detect.outputs.kind, 'python') && needs.detect.outputs.skip_release != 'true'"
-_PYTHON_ONLY = "needs.detect.outputs.kind == 'python' && needs.detect.outputs.skip_release != 'true'"
 _ODCS_ONLY = "needs.detect.outputs.kind == 'python-odcs' && needs.detect.outputs.skip_release != 'true'"
-_SHARED_PYTHON_STEPS = (
+_ODCS_STEPS = (
     "Set up uv",
     "Read the runtime version from the service image",
     "Install continuo-python-runtime",
@@ -107,19 +105,41 @@ class PythonOdcsKindTest(unittest.TestCase):
         # release.yml detects the kind for a dispatch and for a push; ci.yml for a PR.
         self.assertEqual(_RELEASE.count(_ODCS_DETECT), 2)
         self.assertEqual(_CI.count(_ODCS_DETECT), 1)
+
+    def test_the_python_branch_of_detect_is_gone(self):
         for name, text in (("release.yml", _RELEASE), ("ci.yml", _CI)):
             with self.subTest(workflow=name):
-                # The plain contracts/ check is only the `elif` of the ODCS one now.
+                # A service with contracts/ and no ODCS file is a dbt service now, not `python`.
+                self.assertNotIn('KIND="python"', text)
+                self.assertNotIn('elif [ -d "services/${SERVICE}/contracts" ]', text)
                 self.assertNotRegex(text, r'(?m)^\s*if \[ -d "services/\$\{SERVICE\}/contracts" \]')
 
-    def test_the_python_steps_run_for_both_python_kinds(self):
-        for name in _SHARED_PYTHON_STEPS:
-            with self.subTest(step=name):
-                self.assertIn(f"\n        if: {_BOTH_PYTHON_KINDS}\n", _step(_RELEASE, name))
+    def test_no_workflow_merges_contracts_or_writes_a_contract_yaml(self):
+        for name, text in (("release.yml", _RELEASE), ("ci.yml", _CI)):
+            with self.subTest(workflow=name):
+                self.assertNotRegex(text, r"continuo-runtime\s+merge")
+                self.assertNotIn("contract.yaml", text)
+                self.assertNotRegex(text, r"(?mi)^\s*-\s+name:\s*merge\b")
+        for step in ("Merge python contracts", "Upload contract.yaml to S3"):
+            with self.subTest(step=step):
+                self.assertNotIn(f"- name: {step}\n", _RELEASE)
 
-    def test_the_post_sends_the_full_image_ref_for_both_python_kinds(self):
+    def test_no_condition_names_the_plain_python_kind_or_both_python_kinds(self):
+        for name, text in (("release.yml", _RELEASE), ("ci.yml", _CI)):
+            with self.subTest(workflow=name):
+                self.assertNotIn("== 'python'", text)
+                self.assertNotIn("startsWith(", text)
+
+    def test_the_python_steps_run_only_for_python_odcs(self):
+        for name in _ODCS_STEPS:
+            with self.subTest(step=name):
+                self.assertIn(f"\n        if: {_ODCS_ONLY}\n", _step(_RELEASE, name))
+        # The count pins every step: the steps above, then the pack and the bundle upload.
+        self.assertEqual(_RELEASE.count(f"\n        if: {_ODCS_ONLY}\n"), len(_ODCS_STEPS) + 2)
+
+    def test_the_post_sends_the_full_image_ref_for_python_odcs(self):
         self.assertIn(
-            "          IMAGE_TAG: ${{ startsWith(needs.detect.outputs.kind, 'python') "
+            "          IMAGE_TAG: ${{ needs.detect.outputs.kind == 'python-odcs' "
             "&& env.PYTHON_IMAGE_TAG || needs.detect.outputs.image_tag }}\n",
             _step(_RELEASE, _POST),
         )
@@ -137,13 +157,6 @@ class PythonOdcsKindTest(unittest.TestCase):
                 step = _step(_RELEASE, name)
                 for function in ("always()", "failure()", "cancelled()"):
                     self.assertNotIn(function, step)
-
-    def test_the_merge_and_the_contract_upload_stay_python_only(self):
-        for name in ("Merge python contracts", "Upload contract.yaml to S3"):
-            with self.subTest(step=name):
-                self.assertIn(f"\n        if: {_PYTHON_ONLY}\n", _step(_RELEASE, name))
-        # No other step is guarded by the plain python kind.
-        self.assertEqual(_RELEASE.count("needs.detect.outputs.kind == 'python' &&"), 2)
 
     def test_pack_runs_after_the_push_and_before_the_upload_and_the_post(self):
         lint = _position(_RELEASE, "Lint python scripts (no hand-written SQL)")
@@ -194,16 +207,18 @@ class PythonOdcsKindTest(unittest.TestCase):
         comment = _RELEASE[: _position(_RELEASE, _UPLOAD_BUNDLE)].rsplit("\n\n", 1)[1]
         self.assertIn("upload to complete before the POST", re.sub(r"\n\s*# ?", " ", comment))
 
-    def test_ci_runs_the_python_checks_for_both_python_kinds(self):
+    def test_ci_runs_the_python_checks_for_python_odcs_only(self):
         self.assertIn(
-            "\n    if: startsWith(needs.check-single-service.outputs.kind, 'python')\n",
+            "\n  python-checks:\n"
+            "    needs: check-single-service\n"
+            "    if: needs.check-single-service.outputs.kind == 'python-odcs'\n",
             _CI,
         )
-        self.assertNotIn("needs.check-single-service.outputs.kind == 'python'\n", _CI)
 
     def test_ci_dry_runs_pack_for_python_odcs(self):
         step = _step(_CI, _PACK_DRY_RUN)
-        self.assertIn("\n        if: needs.check-single-service.outputs.kind == 'python-odcs'\n", step)
+        # The job runs only for python-odcs, so the step has no condition of its own.
+        self.assertNotIn("\n        if:", step)
         self.assertIn(
             "        run: |\n"
             "          echo '{}' > \"${RUNNER_TEMP}/packages.json\"\n"

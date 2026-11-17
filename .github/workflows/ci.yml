@@ -52,11 +52,10 @@ jobs:
           if [ "$COUNT" -eq 1 ]; then
             SERVICE="$(printf '%s' "$CHANGED" | cut -d/ -f2)"
             # A service is python-odcs iff its contracts/ holds *.odcs.yaml
-            # files, python iff it declares contracts/ without them (a
-            # python-node service directory); every other service is a dbt
-            # project. This mirrors release.yml's own detect job so a PR is
-            # checked the same way its eventual release would be.
-            if compgen -G "services/${SERVICE}/contracts/*.odcs.yaml" > /dev/null; then KIND="python-odcs"; elif [ -d "services/${SERVICE}/contracts" ]; then KIND="python"; else KIND="dbt"; fi
+            # files; every other service is a dbt project. This mirrors
+            # release.yml's own detect job so a PR is checked the same way its
+            # eventual release would be.
+            if compgen -G "services/${SERVICE}/contracts/*.odcs.yaml" > /dev/null; then KIND="python-odcs"; else KIND="dbt"; fi
             echo "service=${SERVICE}" >> "$GITHUB_OUTPUT"
             echo "kind=${KIND}" >> "$GITHUB_OUTPUT"
           fi
@@ -64,11 +63,11 @@ jobs:
   # Python services skip dbt entirely, so nothing above exercises their
   # contracts or scripts. Run the same gate release.yml runs before it ever
   # builds an image, so a broken contract/script fails the PR instead of the
-  # push-to-main release. A python-odcs service also gets a dry run of the
-  # `pack` release.yml runs after the build.
+  # push-to-main release, plus a dry run of the `pack` release.yml runs after
+  # the build.
   python-checks:
     needs: check-single-service
-    if: startsWith(needs.check-single-service.outputs.kind, 'python')
+    if: needs.check-single-service.outputs.kind == 'python-odcs'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -119,7 +118,6 @@ jobs:
       # storage; it only surfaces a pack failure on the PR rather than in the
       # release.
       - name: Dry-run the ODCS bundle pack
-        if: needs.check-single-service.outputs.kind == 'python-odcs'
         run: |
           echo '{}' > "${RUNNER_TEMP}/packages.json"
           continuo-runtime pack "services/${{ needs.check-single-service.outputs.service }}/contracts" \
