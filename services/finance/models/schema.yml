@@ -123,6 +123,14 @@ seeds:
         tests:
           - unique
           - not_null
+      - name: cost_date
+        description: "First day of the month the cost line falls in, as a midnight timestamp."
+      - name: category
+        description: "Cost category, one of COGS, R&D or G&A."
+      - name: subcategory
+        description: "Cost line within the category, for example cloud_hosting or office_rent."
+      - name: cost_type
+        description: "Whether the cost line is variable or fixed."
       - name: amount
         tests:
           - not_null
