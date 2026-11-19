@@ -78,6 +78,24 @@ def _position(text, name):
     return position
 
 
+_JOB_END = re.compile(r"\n(?:[^ \n]|  [^ \n])")
+
+
+def _job_text(text, name):
+    """The text of the job called `name`: its key line to the end of its last line.
+
+    The jobs are the two-space-indented keys under `jobs:`; every line inside one is indented
+    by four spaces or more, so the next job, the comment above it or a top-level key ends it.
+    """
+    marker = f"\n  {name}:\n"
+    start = text.find(marker)
+    if start == -1:
+        raise AssertionError(f"no job named {name!r}")
+    start += 1
+    end = _JOB_END.search(text, start)
+    return text[start : len(text) if end is None else end.start() + 1]
+
+
 _ODCS_DETECT = (
     'if compgen -G "services/${SERVICE}/contracts/*.odcs.yaml" > /dev/null; then KIND="python-odcs"; '
     'else KIND="dbt"; fi'
@@ -240,3 +258,86 @@ class PythonOdcsKindTest(unittest.TestCase):
         self.assertNotIn("s3://", _CI)
         self.assertNotIn("HETZNER", _CI)
 
+
+
+_LITE = "dbt-lite-check"
+_REQUIREMENTS = 'requirements="$(python3 scripts/image_pins.py dbt-requirements "services/${SERVICE}")"'
+_LITE_COMMANDS = (
+    'uv venv --python 3.12 "$RUNNER_TEMP/dbt"',
+    _REQUIREMENTS,
+    'uv pip install --python "$RUNNER_TEMP/dbt/bin/python" $requirements',
+    'uv tool install --python 3.14 "continuo-contracts==${CONTINUO_CONTRACTS_VERSION}"',
+    'continuo-contracts dbt check "services/${SERVICE}" --dbt "$RUNNER_TEMP/dbt/bin/dbt"',
+)
+
+
+class DbtLiteCheckTest(unittest.TestCase):
+    def test_the_job_text_ends_at_the_next_job_and_its_comment(self):
+        job = _job_text(_CI, "dbt-checks")
+        self.assertTrue(job.startswith("  dbt-checks:\n"))
+        self.assertIn("scripts/image_pins.py check-dbt", job)
+        self.assertNotIn("dbt-lite-check", job)
+        self.assertNotIn("\n  scripts:\n", job)
+        self.assertTrue(job.endswith("\n"))
+        self.assertEqual(_job_text(_CI, "scripts"), _CI[_CI.index("\n  scripts:\n") + 1 :])
+
+    def test_the_lite_check_runs_only_for_dbt_services(self):
+        job = _job_text(_CI, _LITE)
+        self.assertIn("\n    needs: check-single-service\n", job)
+        self.assertIn("\n    if: needs.check-single-service.outputs.kind == 'dbt'\n", job)
+        # The job's steps carry no condition of their own that could widen it.
+        self.assertNotIn("\n        if:", job)
+
+    def test_the_lite_check_runs_read_only_with_a_time_limit(self):
+        job = _job_text(_CI, _LITE)
+        self.assertIn("\n    runs-on: ubuntu-latest\n    timeout-minutes: 10\n", job)
+        self.assertIn("\n    permissions:\n      contents: read\n", job)
+
+    def test_the_lite_check_names_the_service_it_checks(self):
+        env = _job_text(_CI, _LITE).split("\n    env:\n", 1)[1].split("\n    steps:\n", 1)[0]
+        self.assertIn("      SERVICE: ${{ needs.check-single-service.outputs.service }}\n", env)
+
+    def test_the_lite_check_installs_the_dbt_the_image_pins(self):
+        job = _job_text(_CI, _LITE)
+        self.assertIn(_REQUIREMENTS, job)
+        # No dbt version is written in the job: the pins come from the service's Dockerfile.
+        self.assertNotIn("dbt-core==", job)
+        self.assertIsNone(re.search(r"dbt-(core|postgres|adapters|common)\s*(==|>=|~=|@)", job))
+
+    def test_the_lite_check_pins_one_exact_library_version(self):
+        job = _job_text(_CI, _LITE)
+        versions = re.findall(r'(?m)^      CONTINUO_CONTRACTS_VERSION: "([^"]*)"$', job)
+        self.assertEqual(len(versions), 1)
+        self.assertRegex(versions[0], r"\A\d+\.\d+\.\d+\Z")
+        # The version is written once, in env, and the install reads it from there.
+        self.assertEqual(len(re.findall(r"continuo-contracts==", job)), 1)
+        self.assertIn('"continuo-contracts==${CONTINUO_CONTRACTS_VERSION}"', job)
+
+    def test_the_lite_check_says_where_the_library_version_comes_from(self):
+        job = _job_text(_CI, _LITE)
+        self.assertIn(
+            "      # The continuo-contracts version that continuo's topology-controller/pyproject.toml pins on main.\n"
+            '      CONTINUO_CONTRACTS_VERSION: "',
+            job,
+        )
+
+    def test_the_lite_check_passes_the_dbt_executable(self):
+        job = _job_text(_CI, _LITE)
+        self.assertIn(
+            'continuo-contracts dbt check "services/${SERVICE}" --dbt "$RUNNER_TEMP/dbt/bin/dbt"\n', job
+        )
+
+    def test_the_lite_check_runs_its_commands_in_order(self):
+        job = _job_text(_CI, _LITE)
+        positions = [job.find(command) for command in _LITE_COMMANDS]
+        for command, position in zip(_LITE_COMMANDS, positions):
+            with self.subTest(command=command):
+                self.assertNotEqual(position, -1)
+        self.assertEqual(positions, sorted(positions))
+
+    def test_the_lite_check_sets_up_the_checkout_and_uv_the_other_jobs_use(self):
+        job = _job_text(_CI, _LITE)
+        self.assertIn("      - name: Checkout\n        uses: actions/checkout@v4\n", job)
+        self.assertIn("      - name: Set up uv\n        uses: astral-sh/setup-uv@v5\n", job)
+        self.assertLess(job.index("actions/checkout@v4"), job.index("astral-sh/setup-uv@v5"))
+        self.assertLess(job.index("astral-sh/setup-uv@v5"), job.index("uv venv"))

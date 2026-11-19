@@ -9,6 +9,10 @@ Subcommands, each taking a service directory:
                    continuo-python-runtime version <dir>/Dockerfile names.
   check-dbt        succeed when <dir>/Dockerfile (and <dir>/Dockerfile.local, when
                    present) pin every dbt package with ==, to the same versions.
+  dbt-requirements print one name==version line for each dbt package
+                   <dir>/Dockerfile pins, in the order of DBT_PACKAGES (stdout
+                   carries only those lines), the list to install into a
+                   virtualenv that runs the dbt of the service image.
 
 Diagnostics go to stderr through logging; the exit status is 0 on success and 1
 on a failed check. The module uses the standard library only.
@@ -115,6 +119,16 @@ def dbt_pins(dockerfile_text: str) -> Dict[str, str]:
     return pins
 
 
+def dbt_requirements(dockerfile_text: str) -> List[str]:
+    """The `name==version` requirement of each dbt package the dbt `RUN pip install` instruction pins.
+
+    The order is that of DBT_PACKAGES, whatever order the instruction names them in. A package the
+    instruction does not install is left out, as in dbt_pins; check_dbt_service reports it.
+    """
+    pins = dbt_pins(dockerfile_text)
+    return [f"{package}=={pins[package]}" for package in DBT_PACKAGES if package in pins]
+
+
 def _dbt_service_report(service_dir: Union[pathlib.Path, str]) -> Tuple[List[str], Dict[str, str]]:
     """The problems of a dbt service's Dockerfiles, and the pins of its Dockerfile."""
     dockerfile = f"{service_dir}/Dockerfile"
@@ -214,6 +228,21 @@ def _cmd_check_dbt(service_dir: str) -> int:
     return 0
 
 
+def _cmd_dbt_requirements(service_dir: str, stdout: TextIO) -> int:
+    path = f"{service_dir}/Dockerfile"
+    text = _read_dockerfile(path)
+    if text is None:
+        log.error("%s: no such file", path)
+        return 1
+    try:
+        requirements = dbt_requirements(text)
+    except PinError as err:
+        log.error("%s: %s", path, err)
+        return 1
+    stdout.write("".join(f"{requirement}\n" for requirement in requirements))
+    return 0
+
+
 def main(
     argv: Optional[List[str]] = None,
     stdin: Optional[TextIO] = None,
@@ -226,6 +255,7 @@ def main(
         ("runtime-version", "print the continuo-python-runtime version the FROM line names"),
         ("check-installed", "check the installed continuo-python-runtime (uv tool list on stdin) against the FROM line"),
         ("check-dbt", "check that the Dockerfiles pin every dbt package with == to the same versions"),
+        ("dbt-requirements", "print the name==version requirement of each dbt package the Dockerfile pins"),
     ):
         command = commands.add_parser(name, help=help_text, description=help_text)
         command.add_argument("service_dir", help="the service directory that holds the Dockerfile")
@@ -235,6 +265,8 @@ def main(
         return _cmd_runtime_version(args.service_dir, stdout if stdout is not None else sys.stdout)
     if args.command == "check-dbt":
         return _cmd_check_dbt(args.service_dir)
+    if args.command == "dbt-requirements":
+        return _cmd_dbt_requirements(args.service_dir, stdout if stdout is not None else sys.stdout)
     return _cmd_check_installed(args.service_dir, stdin if stdin is not None else sys.stdin)
 
 
