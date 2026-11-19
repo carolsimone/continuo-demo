@@ -24,3 +24,16 @@ models:
         tests:
           - unique
           - not_null
+
+seeds:
+  - name: seed_table_1
+    columns:
+      - name: id
+
+  - name: seed_table_2
+    columns:
+      - name: id
+
+  - name: seed_table_3
+    columns:
+      - name: id
