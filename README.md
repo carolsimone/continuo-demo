@@ -118,6 +118,16 @@ uvx pytest==9.1.1 scripts/tests/test_release_sh.py scripts/tests/test_image_pins
 # A dbt service: check that its Dockerfile pins every dbt package.
 python3 scripts/image_pins.py check-dbt services/core
 
+# A dbt service: continuo's lite check, the dbt-lite-check job of ci.yml. dbt runs from a
+# Python 3.12 virtualenv built from the pins of the service's Dockerfile. continuo-contracts
+# needs Python 3.14, so it is a separate tool, and the check is given that dbt with --dbt.
+# Install the CONTINUO_CONTRACTS_VERSION that job names. Passing the check does not
+# guarantee the release: the release runs more checks than this one.
+uv venv --python 3.12 /tmp/dbt
+uv pip install --python /tmp/dbt/bin/python $(python3 scripts/image_pins.py dbt-requirements services/core)
+uv tool install --python 3.14 "continuo-contracts==0.3.1"
+continuo-contracts dbt check services/core --dbt /tmp/dbt/bin/dbt
+
 # A python-odcs service: lint/validate/pack with continuo-runtime. Install the version
 # the service's FROM line names, the same one the workflows install:
 v="$(python3 scripts/image_pins.py runtime-version services/service-py)"

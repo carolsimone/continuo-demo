@@ -194,3 +194,63 @@ class CheckDbtServiceTest(unittest.TestCase):
         with self.assertLogs("image_pins", "ERROR") as logs:
             self.assertEqual(image_pins.main(["check-dbt", str(service)]), 1)
         self.assertEqual(len(logs.output), 2)
+
+
+_PINS_LIST = ["dbt-core==1.12.0b1", "dbt-postgres==1.10.0", "dbt-adapters==1.24.5", "dbt-common==1.39.0"]
+
+
+class DbtRequirementsTest(unittest.TestCase):
+    def test_lists_the_pins_in_dbt_packages_order(self):
+        # The Dockerfile names the packages in another order; the list follows DBT_PACKAGES.
+        text = 'RUN pip install "dbt-common==1.39.0" "dbt-adapters==1.24.5" "dbt-postgres==1.10.0" "dbt-core==1.12.0b1"\n'
+        self.assertEqual(image_pins.dbt_requirements(text), _PINS_LIST)
+
+    def test_lists_the_pins_of_the_service_image(self):
+        self.assertEqual(image_pins.dbt_requirements(_DBT), _PINS_LIST)
+
+    def test_leaves_out_a_package_the_instruction_does_not_install(self):
+        self.assertEqual(image_pins.dbt_requirements(_DBT_TODAY), ["dbt-core==1.12.0b1", "dbt-postgres==1.10.0"])
+
+    def test_refuses_a_loose_pin(self):
+        for spec in ("dbt-adapters>=1.24.5", "dbt-adapters", "dbt-adapters~=1.24", "dbt-adapters==1.24.*"):
+            with self.subTest(spec=spec):
+                with self.assertRaises(image_pins.PinError) as caught:
+                    image_pins.dbt_requirements(_DBT_TODAY.rstrip("\n") + f' "{spec}"\n')
+                self.assertEqual(str(caught.exception), f"dbt-adapters must be pinned with == (got '{spec}')")
+
+    def test_refuses_a_dockerfile_that_installs_no_dbt(self):
+        with self.assertRaisesRegex(image_pins.PinError, "no RUN pip install instruction installs dbt-core"):
+            image_pins.dbt_requirements("FROM python:3.12-slim\n")
+
+
+class DbtRequirementsCommandTest(unittest.TestCase):
+    def test_prints_one_requirement_per_line_and_nothing_else(self):
+        out = io.StringIO()
+        code = image_pins.main(["dbt-requirements", str(_service_dir(Dockerfile=_DBT))], stdout=out)
+        self.assertEqual((code, out.getvalue()), (0, "".join(f"{pin}\n" for pin in _PINS_LIST)))
+
+    def test_reads_the_dockerfile_alone_not_the_local_one(self):
+        local = _DBT.replace("dbt-adapters==1.24.5", "dbt-adapters==1.24.4")
+        out = io.StringIO()
+        code = image_pins.main(
+            ["dbt-requirements", str(_service_dir(Dockerfile=_DBT, Dockerfile_local=local))], stdout=out
+        )
+        self.assertEqual((code, out.getvalue()), (0, "".join(f"{pin}\n" for pin in _PINS_LIST)))
+
+    def test_a_loose_pin_logs_the_reason_and_prints_nothing(self):
+        service = _service_dir(Dockerfile=_DBT.replace("dbt-common==1.39.0", "dbt-common>=1.39.0"))
+        out = io.StringIO()
+        with self.assertLogs("image_pins", "ERROR") as logs:
+            code = image_pins.main(["dbt-requirements", str(service)], stdout=out)
+        self.assertEqual((code, out.getvalue()), (1, ""))
+        self.assertEqual(
+            logs.output, [f"ERROR:image_pins:{service}/Dockerfile: dbt-common must be pinned with == (got 'dbt-common>=1.39.0')"]
+        )
+
+    def test_a_service_without_a_dockerfile_fails_and_prints_nothing(self):
+        service = _service_dir()
+        out = io.StringIO()
+        with self.assertLogs("image_pins", "ERROR") as logs:
+            code = image_pins.main(["dbt-requirements", str(service)], stdout=out)
+        self.assertEqual((code, out.getvalue()), (1, ""))
+        self.assertEqual(logs.output, [f"ERROR:image_pins:{service}/Dockerfile: no such file"])

@@ -143,6 +143,49 @@ jobs:
       - name: Check the dbt pins of the service image
         run: python3 scripts/image_pins.py check-dbt "services/${{ needs.check-single-service.outputs.service }}"
 
+  # continuo's producer-side lite check, on the changed dbt service: the part of
+  # the release's own contract checks that needs no running continuo. It parses
+  # the project and reports what the release would reject, such as a seed whose
+  # declared columns differ from its CSV header, two nodes that share a contract
+  # id, or a node whose service is not the one the project deploys under. A
+  # passing check does not guarantee the release: the release has more stages.
+  # dbt runs from a Python 3.12 virtualenv built from the service image's own
+  # pins (the library needs Python 3.14, so it is a separate tool) and the check
+  # is given that dbt with --dbt.
+  dbt-lite-check:
+    needs: check-single-service
+    if: needs.check-single-service.outputs.kind == 'dbt'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      SERVICE: ${{ needs.check-single-service.outputs.service }}
+      # The continuo-contracts version that continuo's topology-controller/pyproject.toml pins on main.
+      CONTINUO_CONTRACTS_VERSION: "0.3.1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      # The requirements are read into a variable first, so that a Dockerfile
+      # image_pins.py refuses fails the step with its own message.
+      - name: Install the dbt the service image pins
+        run: |
+          uv venv --python 3.12 "$RUNNER_TEMP/dbt"
+          requirements="$(python3 scripts/image_pins.py dbt-requirements "services/${SERVICE}")"
+          # One requirement per line, split into one argument each on purpose; none holds a glob character.
+          # shellcheck disable=SC2086
+          uv pip install --python "$RUNNER_TEMP/dbt/bin/python" $requirements
+
+      - name: Install continuo-contracts
+        run: uv tool install --python 3.14 "continuo-contracts==${CONTINUO_CONTRACTS_VERSION}"
+
+      - name: Check the dbt project with continuo's lite check
+        run: continuo-contracts dbt check "services/${SERVICE}" --dbt "$RUNNER_TEMP/dbt/bin/dbt"
+
   # The scripts CI and CD run, and the wiring of the workflows, are tested on
   # every change to them: release.sh against a stub of continuo's release API,
   # the image pins, and the text of both workflows.
