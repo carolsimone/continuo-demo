@@ -7,6 +7,7 @@ import unittest
 _WORKFLOWS = pathlib.Path(__file__).resolve().parents[2] / ".github" / "workflows"
 _RELEASE = (_WORKFLOWS / "release.yml").read_text()
 _CI = (_WORKFLOWS / "ci.yml").read_text()
+_README = (pathlib.Path(__file__).resolve().parents[2] / "README.md").read_text(encoding="utf-8")
 
 
 class ReleaseDispatchTest(unittest.TestCase):
@@ -312,6 +313,24 @@ class DbtLiteCheckTest(unittest.TestCase):
         # The version is written once, in env, and the install reads it from there.
         self.assertEqual(len(re.findall(r"continuo-contracts==", job)), 1)
         self.assertIn('"continuo-contracts==${CONTINUO_CONTRACTS_VERSION}"', job)
+
+    def test_the_readme_installs_the_library_version_the_lite_check_pins(self):
+        job = _job_text(_CI, _LITE)
+        (ci_version,) = re.findall(r'(?m)^      CONTINUO_CONTRACTS_VERSION: "([^"]*)"$', job)
+        readme_versions = re.findall(r"continuo-contracts==([^\s\"'`]+)", _README)
+        self.assertTrue(
+            readme_versions,
+            "README.md has no continuo-contracts==X.Y.Z literal to compare with "
+            f"CONTINUO_CONTRACTS_VERSION {ci_version!r} of the {_LITE} job in .github/workflows/ci.yml",
+        )
+        for readme_version in readme_versions:
+            with self.subTest(readme_version=readme_version):
+                self.assertEqual(
+                    readme_version,
+                    ci_version,
+                    f"README.md installs continuo-contracts=={readme_version}, but the {_LITE} job "
+                    f"in .github/workflows/ci.yml sets CONTINUO_CONTRACTS_VERSION to {ci_version!r}",
+                )
 
     def test_the_lite_check_says_where_the_library_version_comes_from(self):
         job = _job_text(_CI, _LITE)
