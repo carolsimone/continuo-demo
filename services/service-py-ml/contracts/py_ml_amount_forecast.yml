@@ -1,0 +1,29 @@
+nodes:
+  # A machine-learning python node in the demo estate. It reads the same
+  # cross-service table service-py does — analytics.daily_transactions, produced
+  # by the core dbt project — and fits an XGBoost model on it to forecast each
+  # day's total EUR amount. It exists to show that an ML engineer plugs a model
+  # into Continuo with no platform changes: a python node is just run(ctx) ->
+  # Arrow table, and the model library is layered onto the runtime base image
+  # (see the Dockerfile).
+  - schema: analytics
+    table: py_ml_amount_forecast
+    description: "Per-day actual vs. XGBoost-predicted total EUR amount, learned from analytics.daily_transactions."
+    owner: "service-py-ml"
+    schedule: daily
+    criticality: SECONDARY
+    script: scripts/py_ml_amount_forecast.py
+    # One unaggregated read — raw per-transaction timestamp and amount. The
+    # aggregation into per-day rows and every feature is built in Python, so the
+    # read stays a plain row selection (same pattern as service-py).
+    reads:
+      daily: select created_at, amount_eur from analytics.daily_transactions
+    output_columns:
+      - {name: day, type: DATE, nullable: false}
+      # The warehouse aggregate stays NUMERIC: it is a sum of a decimal column,
+      # so it reaches conform() as a decimal and casts losslessly.
+      - {name: actual_amount, type: "NUMERIC(12,2)", nullable: false}
+      # The model output is DOUBLE PRECISION, not NUMERIC, on purpose: XGBoost
+      # predictions are floats, and conform() rejects a float -> decimal cast as
+      # lossy. DOUBLE PRECISION maps to float64 and takes the prediction as-is.
+      - {name: predicted_amount, type: "DOUBLE PRECISION", nullable: false}
