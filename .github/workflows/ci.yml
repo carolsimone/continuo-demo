@@ -8,6 +8,7 @@ on:
     branches: [main]
     paths:
       - 'services/**'
+      - 'ontology/**'
       - 'scripts/release.sh'
       - 'scripts/image_pins.py'
       - 'scripts/tests/test_release_sh.py'
@@ -15,6 +16,10 @@ on:
       - 'scripts/tests/test_workflows.py'
       - '.github/workflows/ci.yml'
       - '.github/workflows/release.yml'
+
+env:
+  # The continuo-contracts version that continuo's topology-controller/pyproject.toml pins on main.
+  CONTINUO_CONTRACTS_VERSION: "0.4.1"
 
 jobs:
   check-single-service:
@@ -110,7 +115,7 @@ jobs:
         run: continuo-runtime lint "services/${{ needs.check-single-service.outputs.service }}/scripts"
 
       - name: Validate python contracts
-        run: continuo-runtime validate "services/${{ needs.check-single-service.outputs.service }}/contracts" --dialect postgres
+        run: continuo-runtime validate "services/${{ needs.check-single-service.outputs.service }}/contracts" --dialect postgres --service "${{ needs.check-single-service.outputs.service }}" --ontology ontology/ontology.yaml
 
       # A dry run: CI builds no image, so the pack gets an empty package
       # listing (--image-packages) where the release's pack gets the pushed
@@ -161,8 +166,6 @@ jobs:
       contents: read
     env:
       SERVICE: ${{ needs.check-single-service.outputs.service }}
-      # The continuo-contracts version that continuo's topology-controller/pyproject.toml pins on main.
-      CONTINUO_CONTRACTS_VERSION: "0.3.1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -184,7 +187,30 @@ jobs:
         run: uv tool install --python 3.14 "continuo-contracts==${CONTINUO_CONTRACTS_VERSION}"
 
       - name: Check the dbt project with continuo's lite check
-        run: continuo-contracts dbt check "services/${SERVICE}" --dbt "$RUNNER_TEMP/dbt/bin/dbt"
+        run: continuo-contracts dbt check "services/${SERVICE}" --dbt "$RUNNER_TEMP/dbt/bin/dbt" --ontology ontology/ontology.yaml
+
+  # The check every ontology repository runs (the demo is one): the file loads and
+  # holds no error. It runs on every pull request, so a service's pull request is
+  # checked against the ontology file it carries, and a change to the file is
+  # checked even when no service changed. The service-side checks, which read the
+  # file, are in dbt-lite-check and python-checks.
+  ontology-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install continuo-contracts
+        run: uv tool install --python 3.14 "continuo-contracts==${CONTINUO_CONTRACTS_VERSION}"
+
+      - name: Check the ontology file
+        run: continuo-contracts ontology check ontology/ontology.yaml
 
   # The scripts CI and CD run, and the wiring of the workflows, are tested on
   # every change to them: release.sh against a stub of continuo's release API,

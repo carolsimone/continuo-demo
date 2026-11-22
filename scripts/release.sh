@@ -49,19 +49,22 @@
 #   SERVICE          — the single changed service, e.g. service-3
 #   IMAGE_TAG        — that service's image tag: a dbt release passes the bare
 #                      short sha (continuo composes the pull ref itself); a
-#                      python release (KIND=python or KIND=python-odcs) passes
-#                      the full pullable registry ref, since continuo runs that
-#                      verbatim.
+#                      python release (KIND=python-odcs) passes the full
+#                      pullable registry ref, since continuo runs that verbatim.
+#                      The ontology has no image: its release passes the short
+#                      sha of the commit.
 #
 # Optional:
 #   CONTINUO_TOKEN   — bearer token to use instead of the GitHub Actions OIDC
 #                      token (see Authentication).
-#   KIND             — the service kind: "dbt", "python" or "python-odcs".
-#                      "python" marks a python-node service and "python-odcs" a
-#                      python-node service whose contracts are ODCS files; each
+#   KIND             — the service kind: "dbt", "python-odcs" or "ontology".
+#                      "python-odcs" marks a python-node service whose contracts
+#                      are ODCS files, and "ontology" the one service that holds
+#                      the company's ontology file (ontology/ontology.yaml); each
 #                      adds "kind":"<value>" to the POST body. "dbt", or leaving
-#                      it unset, sends no "kind" field at all. Any other value
-#                      is refused before the first request, with exit status 2.
+#                      it unset, sends no "kind" field at all. Any other value,
+#                      "python" included, is refused before the first request,
+#                      with exit status 2.
 #   REPO             — "<owner>/<repo>" sent as "repo" (see Authentication).
 #   COMMIT_SHA       — full commit sha sent as "commit_sha".
 #   FORCE_BOOTSTRAP  — "true" to promote without validation regardless of
@@ -110,9 +113,9 @@ set -euo pipefail
 CONTINUO_TOKEN="${CONTINUO_TOKEN:-}"
 KIND="${KIND:-}"
 case "$KIND" in
-  ""|dbt|python|python-odcs) ;;
+  ""|dbt|python-odcs|ontology) ;;
   *)
-    echo "release.sh: unknown KIND \"${KIND}\": expected dbt, python or python-odcs" >&2
+    echo "release.sh: unknown KIND \"${KIND}\": expected dbt, python-odcs or ontology" >&2
     exit 2
     ;;
 esac
@@ -421,7 +424,7 @@ BODY="$(jq -n \
   --arg commit_sha "$COMMIT_SHA" \
   '{release_id: $release_id, service: $service, image_tag: $image_tag, bootstrap: $bootstrap}
    + (if $rebaseline then {rebaseline: true} else {} end)
-   + (if ($kind == "python" or $kind == "python-odcs") then {kind: $kind} else {} end)
+   + (if ($kind == "python-odcs" or $kind == "ontology") then {kind: $kind} else {} end)
    + (if $repo != "" then {repo: $repo} else {} end)
    + (if $commit_sha != "" then {commit_sha: $commit_sha} else {} end)')"
 echo "POST /api/v1/releases ${BODY}"
