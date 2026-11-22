@@ -5,7 +5,7 @@
 # The tag is the runtime version: CI reads it (scripts/image_pins.py) and
 # installs the same continuo-runtime CLI, so the hashes CI writes are the ones
 # this image's harness recomputes at start.
-FROM ghcr.io/carolsimone/continuo-python-runtime-postgres:v0.13.0
+FROM ghcr.io/carolsimone/continuo-python-runtime-postgres:v0.14.0
 COPY contracts/ /app/contracts/
 COPY scripts/ /app/scripts/
 # The runtime base already declares USER 65532:65532 — a frozen cross-repo
