@@ -196,12 +196,13 @@ class ReleaseShTest(unittest.TestCase):
         self.assertNotIn("commit_sha", body)
         self.assertNotIn("kind", body)
 
-    def test_python_kind_adds_kind_to_the_body(self):
+    def test_ontology_kind_adds_kind_to_the_body(self):
         with _Stub() as stub:
-            result = _run_release(stub, {"KIND": "python"})
+            result = _run_release(stub, {"KIND": "ontology", "SERVICE": "ontology"})
 
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-        self.assertEqual(json.loads(stub.posts()[0][3])["kind"], "python")
+        body = json.loads(stub.posts()[0][3])
+        self.assertEqual((body["kind"], body["service"]), ("ontology", "ontology"))
 
     def test_python_odcs_kind_adds_kind_to_the_body(self):
         with _Stub() as stub:
@@ -211,13 +212,14 @@ class ReleaseShTest(unittest.TestCase):
         self.assertEqual(json.loads(stub.posts()[0][3])["kind"], "python-odcs")
 
     def test_an_unknown_kind_stops_the_script(self):
-        for value in ("pythn", "Python", "python-odcs ", "odcs"):
+        # `python` is refused too: continuo's release-controller has no such kind.
+        for value in ("python", "pythn", "Python", "python-odcs ", "odcs", "Ontology", "ontology "):
             with self.subTest(kind=value), _Stub() as stub:
                 result = _run_release(stub, {"KIND": value})
 
                 self.assertEqual(result.returncode, 2)
                 self.assertIn(
-                    f'release.sh: unknown KIND "{value}": expected dbt, python or python-odcs',
+                    f'release.sh: unknown KIND "{value}": expected dbt, python-odcs or ontology',
                     result.stderr,
                 )
                 self.assertEqual(stub.requests, [])
@@ -264,16 +266,6 @@ class ReleaseShTest(unittest.TestCase):
             },
         )
         self.assertIn("rebaseline=true -> bootstrap=true", result.stdout)
-
-    def test_python_rebaseline_keeps_the_kind(self):
-        with _Stub() as stub:
-            result = _run_release(
-                stub, {"REBASELINE": "true", "KIND": "python", "IMAGE_TAG": "docker.io/u/service-py:4e5f6a7"}
-            )
-
-        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-        body = json.loads(stub.posts()[0][3])
-        self.assertEqual((body["kind"], body["bootstrap"], body["rebaseline"]), ("python", True, True))
 
     def test_python_odcs_rebaseline_keeps_the_kind(self):
         with _Stub() as stub:

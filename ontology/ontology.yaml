@@ -1,0 +1,150 @@
+# The demo's ontology: the company-wide vocabulary of what its data is about
+# (entities) and who acts on it (principals). continuo-demo is its own ontology
+# repository, so this file is the one the demo releases and the one every
+# service's CI checks its contracts against.
+#
+# How it is released: a push to main that changes this file is released as the
+# service `ontology`, kind `ontology` (.github/workflows/release.yml), after the
+# release of the one service the same push may change. Its pull request is
+# checked by `continuo-contracts ontology check ontology/ontology.yaml`
+# (.github/workflows/ci.yml). continuo checks the contracts of every service
+# declared under `principals.services` and no others, so a service is declared
+# in the pull request that binds all of its nodes.
+#
+# Company-wide ontology for the demo estate. One file, two kinds of entity:
+#   principals: who acts on data (domains, services, teams, roles, people)
+#   entities:   what the data is about (things), with their properties
+#
+# Rules:
+#   - A thing is singular and named after what it is, not after a table.
+#   - A property is a fact about the thing every copy must agree on. Columns
+#     that describe how a row was stored (_loaded_at, run ids) are not
+#     properties; they belong to the copy that carries them.
+#   - A property is a plain value or a reference to another thing (ref).
+#   - New facts about an existing thing computed by another team are a new
+#     thing, owned by that team, referencing the original (UserRevenue -> User).
+#   - Access: the owning domain reads every copy of its things; other domains
+#     get table-level grants on a copy's contract; personal properties carry
+#     their own readers and purpose, deny by default, and a table grant never
+#     opens them.
+#   - Identity is not order. Two copies of one thing are siblings, not a chain.
+#     Order comes from copy-to-copy edges: parsed SQL, or `reads:` on a copy's
+#     contract. `born_in:` names the copy a thing is born in; it is upstream of
+#     every other copy of that thing.
+
+principals:
+  domains:
+    core:      {owner_team: core-data}
+    finance:   {owner_team: finance-data}
+    marketing: {owner_team: marketing-data}
+    analytics: {owner_team: analytics-eng}
+  services: {}
+  teams:
+    core-data:      {idp_group: "okta:core-data"}
+    finance-data:   {idp_group: "okta:finance-data"}
+    marketing-data: {idp_group: "okta:marketing-data"}
+    analytics-eng:  {idp_group: "okta:analytics-eng"}
+  roles:
+    analyst: {idp_group: "okta:analysts"}
+  people:
+    source: idp            # synced from Okta by SCIM, never hand-written
+
+entities:
+  User:
+    owner: core
+    key: {user_id: int}
+    properties:
+      name:       {type: string,    personal: true}
+      email:      {type: string,    personal: true}
+      birth_year: {type: int,       personal: true}
+      created_at: {type: timestamp}
+    access:
+      - {properties: [name, email, birth_year], readers: [core], purpose: service_operation}
+
+  Transaction:
+    owner: core
+    born_in: kafka.card_events   # the card stream; card-service writes it, flink-transactions reads it
+    # transaction_id is not unique across sources; the key is the pair.
+    key: {source: "enum[card, fx]", transaction_id: int}
+    properties:
+      user_id:        {ref: User}
+      amount_eur:     {type: money, currency: EUR}     # what the customer moved
+      fee_amount_eur: {type: money, currency: EUR}     # what the company earned: revenue
+      created_at:     {type: timestamp}
+
+  FxRate:
+    owner: finance
+    key: {currency: string, rate_date: date}
+    properties:
+      rate_to_eur: {type: decimal}
+
+  OperationalCost:
+    owner: finance
+    key: {cost_id: int}
+    properties:
+      cost_date: {type: date}
+      category:  {type: "enum[COGS, R&D, G&A]"}
+      cost_type: {type: "enum[variable, fixed]"}
+      amount:    {type: money, currency: EUR}
+
+  MarketingSpend:
+    owner: marketing
+    key: {spend_id: int}
+    properties:
+      channel:     {type: string}
+      campaign:    {type: string}
+      spend_date:  {type: date}
+      amount:      {type: money, currency: EUR}
+      impressions: {type: int}
+      clicks:      {type: int}
+
+  UserAcquisition:
+    owner: marketing
+    key: {user_id: "ref User"}
+    properties:
+      channel:     {type: string}
+      campaign:    {type: string}
+      acquired_at: {type: timestamp}
+
+  Order:
+    owner: analytics          # born in service-py's demo_orders_csv node
+    key: {order_id: int}
+    properties:
+      customer: {type: string}
+      amount:   {type: money, currency: EUR}
+
+  # New facts about a User, each its own thing, referencing User.
+  UserRevenue:
+    owner: core
+    key: {user_id: "ref User"}
+    properties:
+      acquisition_month: {type: date,  derived_from: [User.created_at]}
+      revenue_eur:       {type: money, currency: EUR, derived_from: [Transaction.fee_amount_eur]}
+      gross_volume_eur:  {type: money, currency: EUR, derived_from: [Transaction.amount_eur]}
+
+  UserOperationalCost:
+    owner: finance
+    key: {user_id: "ref User"}
+    properties:
+      acquisition_month:    {type: date,  derived_from: [User.created_at]}
+      operational_cost_eur: {type: money, currency: EUR, derived_from: [OperationalCost.amount]}
+      variable_cost_eur:    {type: money, currency: EUR, derived_from: [OperationalCost.amount]}
+
+  UserMarketingCost:
+    owner: marketing
+    key: {user_id: "ref User"}
+    properties:
+      channel:            {type: string, derived_from: [UserAcquisition.channel]}
+      marketing_cost_eur: {type: money, currency: EUR, derived_from: [MarketingSpend.amount]}
+
+  UserLtv:
+    owner: finance
+    key: {user_id: "ref User"}
+    properties:
+      contribution_margin_eur: {type: money, currency: EUR, derived_from: [UserRevenue.revenue_eur, UserOperationalCost.variable_cost_eur]}
+      fully_allocated_eur:     {type: money, currency: EUR, derived_from: [UserRevenue.revenue_eur, UserOperationalCost.operational_cost_eur, UserMarketingCost.marketing_cost_eur]}
+      ltv_to_cac:              {type: decimal, nullable: true, derived_from: [UserRevenue.revenue_eur, UserOperationalCost.variable_cost_eur, UserMarketingCost.marketing_cost_eur]}
+
+# Aggregates (operational_costs_monthly, marketing_spend_monthly, py_daily_kpis)
+# are not things. They are copies with a period grain, declared on the model
+# (meta.continuo.grain: [month]) with each column's `from:` property.

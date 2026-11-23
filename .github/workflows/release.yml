@@ -26,6 +26,7 @@ on:
     branches: [main]
     paths:
       - 'services/**'
+      - 'ontology/**'
       - '.github/workflows/release.yml'
   workflow_dispatch:
     inputs:
@@ -65,6 +66,8 @@ jobs:
       image_tag: ${{ steps.ids.outputs.image_tag }}
       tag: ${{ steps.ids.outputs.tag }}
       release_id: ${{ steps.ids.outputs.release_id }}
+      ontology_changed: ${{ steps.ids.outputs.ontology_changed }}
+      ontology_release_id: ${{ steps.ids.outputs.ontology_release_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -97,6 +100,8 @@ jobs:
             echo "service=${SERVICE}" >> "$GITHUB_OUTPUT"
             echo "kind=${KIND}" >> "$GITHUB_OUTPUT"
             echo "image_tag=${SHA}" >> "$GITHUB_OUTPUT"
+            # A dispatch releases a service; the ontology is released by a push that changes its file.
+            echo "ontology_changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -124,9 +129,26 @@ jobs:
             exit 1
           fi
 
-          # No service changed → nothing to release; skip the release job.
+          # The ontology is one file, ontology/ontology.yaml, released as its own
+          # service by the release-ontology job once the service job has ended. It
+          # is not a services/<svc>/ folder, so it never counts toward the one
+          # changed service above, and a push that changes a service and the
+          # ontology is one release of each, the service first. These outputs are
+          # written only after the refusal above, so a refused push exposes none.
+          if [ -n "$(git diff --name-only "$BEFORE" HEAD -- ontology/ontology.yaml)" ]; then
+            ONTOLOGY_CHANGED=true
+          else
+            ONTOLOGY_CHANGED=false
+          fi
+          {
+            echo "tag=${SHA}"
+            echo "ontology_changed=${ONTOLOGY_CHANGED}"
+            echo "ontology_release_id=rel-${SHA}-${GITHUB_RUN_NUMBER}-ontology"
+          } >> "$GITHUB_OUTPUT"
+
+          # No service changed → no service to release; skip the release job.
           if [ "$COUNT" -eq 0 ]; then
-            echo "No service change in this push — nothing to do; skipping."
+            echo "No service change in this push — skipping the service release (ontology changed: ${ONTOLOGY_CHANGED})."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "skip_release=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -141,7 +163,6 @@ jobs:
 
           echo "skip=false" >> "$GITHUB_OUTPUT"
           echo "skip_release=false" >> "$GITHUB_OUTPUT"
-          echo "tag=${SHA}" >> "$GITHUB_OUTPUT"
           echo "release_id=rel-${SHA}-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
           echo "service=${SERVICE}" >> "$GITHUB_OUTPUT"
           echo "kind=${KIND}" >> "$GITHUB_OUTPUT"
@@ -333,4 +354,62 @@ jobs:
           # Renders 'false' on push events too. release.sh sends a rebaseline
           # as a bootstrap.
           REBASELINE: ${{ inputs.rebaseline == true }}
+        run: bash scripts/release.sh
+
+  # The ontology (ontology/ontology.yaml) is released as the service `ontology`,
+  # kind `ontology`: continuo reads the file from object storage, so the upload
+  # completes before the POST, as the ODCS bundle's does. It runs after the
+  # release job, when the same push changes a service, so continuo checks the
+  # new service contracts against the ontology the service was written for only
+  # once the service itself is released; and only when that release succeeded or
+  # was skipped (no service changed). always() lets it run after a skipped
+  # release job; the detect result is named too, so a refused push, where
+  # release is skipped as well, releases nothing. A rejected service release
+  # stops it. The pull request that changes the file ran
+  # `continuo-contracts ontology check` (ci.yml), so this job runs no check.
+  release-ontology:
+    needs: [detect, release]
+    if: always() && needs.detect.result == 'success' && needs.detect.outputs.ontology_changed == 'true' && (needs.release.result == 'success' || needs.release.result == 'skipped')
+    runs-on: ubuntu-latest
+    # release.sh's own 15-minute POLL_TIMEOUT_SECONDS budget, plus the checkout and the upload.
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # Lets release.sh request this run's OIDC token for continuo's API.
+      id-token: write
+
+    steps:
+      # Fail before the upload when continuo's address is not configured.
+      - name: Require the CONTINUO_URL repository variable
+        env:
+          CONTINUO_URL: ${{ vars.CONTINUO_URL }}
+        run: |
+          if [ -z "${CONTINUO_URL}" ]; then
+            echo "::error::the repository variable CONTINUO_URL is empty; set it to the origin of continuo's ui"
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Same Hetzner object-storage account and endpoint as the ODCS bundle upload.
+      - name: Upload ontology.yaml to S3
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
+        run: |
+          aws s3 cp ontology/ontology.yaml \
+            "s3://continuo-dev/ontology/${{ needs.detect.outputs.ontology_release_id }}/ontology.yaml" \
+            --endpoint-url https://nbg1.your-objectstorage.com \
+            --region eu-central-1
+
+      - name: Drive the ontology release through continuo
+        env:
+          CONTINUO_URL: ${{ vars.CONTINUO_URL }}
+          RELEASE_ID: ${{ needs.detect.outputs.ontology_release_id }}
+          SERVICE: ontology
+          IMAGE_TAG: ${{ needs.detect.outputs.tag }}
+          KIND: ontology
+          REPO: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
         run: bash scripts/release.sh
