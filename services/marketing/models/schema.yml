@@ -54,10 +54,10 @@ models:
           - not_null
       - name: campaign
         description: "Campaign that acquired the user. Descriptive only — allocation happens at channel grain, not campaign grain."
-        meta: {continuo: {local: true}}
+        meta: {continuo: {property: UserAcquisition.campaign}}
       - name: acquired_at
         description: "Exact timestamp the user was acquired, before truncation to acquisition_month."
-        meta: {continuo: {local: true}}
+        meta: {continuo: {property: UserAcquisition.acquired_at}}
         tests:
           - not_null
       - name: acquisition_month
@@ -78,6 +78,13 @@ models:
   - name: dormant_probe
     description: "Spend per paid channel: campaign count and total EUR. It has an owner and no tag, so it has no schedule: no cron runs it, and you run it by hand from its node page."
     meta: {continuo: {grain: [channel]}}
+    columns:
+      - name: channel
+        meta: {continuo: {from: MarketingSpend.channel}}
+      - name: campaign_count
+        meta: {continuo: {from: MarketingSpend, agg: count}}
+      - name: spend_eur
+        meta: {continuo: {from: MarketingSpend.amount, agg: sum}}
 
 seeds:
   - name: seed_marketing_spend
