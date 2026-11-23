@@ -1,2 +1,2 @@
 {{ config(materialized='table', tags=['daily']) }}
-SELECT * FROM {{ ref('seed_table_3') }}
+SELECT does_not_exist FROM {{ ref('seed_table_3') }}
