@@ -7,6 +7,8 @@ description:
   purpose: "Contract-only csv node: loads the demo orders export from object storage"
 team:
   name: service-py
+roles:
+  - {role: core, access: read}        # core's read_order reads this table
 customProperties:
   - {vendor: continuo, property: kind, value: python-csv}
   - {vendor: continuo, property: schedule, value: daily}
@@ -15,6 +17,8 @@ customProperties:
 schema:
   - name: demo_orders_csv
     physicalType: table
+    customProperties:
+      - {vendor: continuo, property: entity, value: Order}
     properties:
       - {name: order_id, physicalType: INTEGER, required: true}
       - {name: customer, physicalType: "VARCHAR(64)"}
