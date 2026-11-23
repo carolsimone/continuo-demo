@@ -1,2 +1,2 @@
 {{ config(materialized='table', tags=['daily']) }}
-SELECT * FROM {{ ref('seed_table_3') }}
+SELECT * FROM analytics.seed_table_3

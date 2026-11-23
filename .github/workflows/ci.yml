@@ -44,7 +44,11 @@ jobs:
           BASE="${{ github.event.pull_request.base.sha }}"
           HEAD="${{ github.event.pull_request.head.sha }}"
 
-          CHANGED="$(git diff --name-only "$BASE" "$HEAD" -- 'services/' | cut -d/ -f1-2 | sort -u)"
+          # Three dots: the PR's own changes since it left the base branch. Two dots
+          # would also list every change that landed on the base branch after the PR's
+          # branch was cut, so a branch that is behind its base reads as touching
+          # more services than it does.
+          CHANGED="$(git diff --name-only "$BASE...$HEAD" -- 'services/' | cut -d/ -f1-2 | sort -u)"
           COUNT="$(printf '%s\n' "$CHANGED" | grep -c . || true)"
 
           if [ "$COUNT" -gt 1 ]; then
@@ -58,7 +62,7 @@ jobs:
           # The ontology is one file, not a services/<svc>/ folder, so it never counts toward the
           # one changed service. A change to it is checked against every service
           # (ontology-services-check).
-          if [ -n "$(git diff --name-only "$BASE" "$HEAD" -- ontology/ontology.yaml)" ]; then
+          if [ -n "$(git diff --name-only "$BASE...$HEAD" -- ontology/ontology.yaml)" ]; then
             echo "ontology_changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "ontology_changed=false" >> "$GITHUB_OUTPUT"
