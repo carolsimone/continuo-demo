@@ -42,6 +42,7 @@ principals:
     core: {domain: core}
     finance: {domain: finance}
     marketing: {domain: marketing}
+    service-py: {domain: analytics}
   teams:
     core-data:      {idp_group: "okta:core-data"}
     finance-data:   {idp_group: "okta:finance-data"}

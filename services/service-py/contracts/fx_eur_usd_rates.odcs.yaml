@@ -16,8 +16,23 @@ customProperties:
 schema:
   - name: fx_eur_usd_rates
     physicalType: table
+    customProperties:
+      - {vendor: continuo, property: entity, value: FxRate}
+      - {vendor: continuo, property: fixed, value: {currency: USD}}   # every row is the euro to dollar rate
     properties:
       - {name: rate_date, physicalType: DATE, required: true}
-      - {name: base, physicalType: VARCHAR(3), required: true}
-      - {name: quote, physicalType: VARCHAR(3), required: true}
-      - {name: rate, physicalType: DOUBLE PRECISION, required: true}
+      - name: base
+        physicalType: VARCHAR(3)
+        required: true
+        customProperties:
+          - {vendor: continuo, property: local, value: true}
+      - name: quote
+        physicalType: VARCHAR(3)
+        required: true
+        customProperties:
+          - {vendor: continuo, property: local, value: true}
+      - name: rate                      # dollars per euro: the inverse of FxRate.rate_to_eur
+        physicalType: DOUBLE PRECISION
+        required: true
+        customProperties:
+          - {vendor: continuo, property: local, value: true}

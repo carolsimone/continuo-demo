@@ -7,6 +7,8 @@ description:
   purpose: Daily transaction count and total amount in EUR, rolled up from analytics.daily_transactions.
 team:
   name: service-py
+roles:
+  - {role: core, access: read}        # core's dbt_daily_kpis reads this table
 customProperties:
   - {vendor: continuo, property: schedule, value: daily}
   - {vendor: continuo, property: criticality, value: SECONDARY}
@@ -18,6 +20,8 @@ customProperties:
 schema:
   - name: py_daily_kpis
     physicalType: table
+    customProperties:
+      - {vendor: continuo, property: grain, value: [day]}        # a copy, like core's dbt_daily_kpis
     properties:
       - {name: day, physicalType: DATE, required: true}
       - {name: tx_count, physicalType: INTEGER, required: true}
