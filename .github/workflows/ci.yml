@@ -30,6 +30,7 @@ jobs:
     outputs:
       service: ${{ steps.check.outputs.service }}
       kind: ${{ steps.check.outputs.kind }}
+      ontology_changed: ${{ steps.check.outputs.ontology_changed }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -53,6 +54,15 @@ jobs:
           fi
 
           echo "OK: ${COUNT} service(s) changed"
+
+          # The ontology is one file, not a services/<svc>/ folder, so it never counts toward the
+          # one changed service. A change to it is checked against every service
+          # (ontology-services-check).
+          if [ -n "$(git diff --name-only "$BASE" "$HEAD" -- ontology/ontology.yaml)" ]; then
+            echo "ontology_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ontology_changed=false" >> "$GITHUB_OUTPUT"
+          fi
 
           if [ "$COUNT" -eq 1 ]; then
             SERVICE="$(printf '%s' "$CHANGED" | cut -d/ -f2)"
@@ -211,6 +221,60 @@ jobs:
 
       - name: Check the ontology file
         run: continuo-contracts ontology check ontology/ontology.yaml
+
+  # A pull request that changes the ontology file is checked against every service of this
+  # checkout, not only the one service it changes. The ontology and every contract it is
+  # checked against live in this repository, so a property that a service binds and the
+  # change renames or removes is found here, and not on dev after the merge. A service the
+  # ontology does not declare passes with one information line. dbt-lite-check and
+  # python-checks still check the one changed service on every pull request.
+  ontology-services-check:
+    needs: check-single-service
+    if: needs.check-single-service.outputs.ontology_changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install continuo-contracts
+        run: uv tool install --python 3.14 "continuo-contracts==${CONTINUO_CONTRACTS_VERSION}"
+
+      # One dbt for each service, built from the pins of that service's own Dockerfile, as
+      # dbt-lite-check does. A failing service does not hide the next, and the step fails.
+      - name: Check every dbt service against the ontology
+        run: |
+          status=0
+          for dir in services/*/; do
+            service="$(basename "$dir")"
+            if compgen -G "${dir}contracts/*.odcs.yaml" > /dev/null; then continue; fi
+            uv venv --python 3.12 "$RUNNER_TEMP/dbt-${service}"
+            requirements="$(python3 scripts/image_pins.py dbt-requirements "services/${service}")"
+            # One requirement per line, split into one argument each on purpose; none holds a glob character.
+            # shellcheck disable=SC2086
+            uv pip install --python "$RUNNER_TEMP/dbt-${service}/bin/python" $requirements
+            continuo-contracts dbt check "services/${service}" --dbt "$RUNNER_TEMP/dbt-${service}/bin/dbt" --ontology ontology/ontology.yaml || status=1
+          done
+          exit "$status"
+
+      # The CLI is the runtime the service image runs, read from its Dockerfile, as python-checks does.
+      - name: Check every Python service against the ontology
+        run: |
+          status=0
+          for dir in services/*/; do
+            service="$(basename "$dir")"
+            if ! compgen -G "${dir}contracts/*.odcs.yaml" > /dev/null; then continue; fi
+            version="$(python3 scripts/image_pins.py runtime-version "services/${service}")"
+            uv tool install --force "continuo-python-runtime==${version}" || \
+              uv tool install --force "git+https://github.com/carolsimone/continuo-python-runtime@v${version}"
+            continuo-runtime validate "services/${service}/contracts" --dialect postgres --service "${service}" --ontology ontology/ontology.yaml || status=1
+          done
+          exit "$status"
 
   # The scripts CI and CD run, and the wiring of the workflows, are tested on
   # every change to them: release.sh against a stub of continuo's release API,
