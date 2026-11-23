@@ -41,6 +41,7 @@ principals:
   services:
     core: {domain: core}
     finance: {domain: finance}
+    marketing: {domain: marketing}
   teams:
     core-data:      {idp_group: "okta:core-data"}
     finance-data:   {idp_group: "okta:finance-data"}
