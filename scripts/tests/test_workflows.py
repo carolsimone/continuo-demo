@@ -528,30 +528,35 @@ def _needs(job):
     return [] if match is None else [name.strip() for name in match.group(1).split(",")]
 
 
-def _holds(condition, outputs, results):
-    """Evaluate the part of the GitHub expression language the release jobs' conditions use."""
-    python = condition.replace("always()", "True")
+def _holds(condition, outputs, results, cancelled=False):
+    """Evaluate the part of the GitHub expression language the release jobs' conditions use.
+
+    `always()` is true even in a cancelled run, `!cancelled()` is not.
+    """
+    python = condition.replace("always()", "True").replace("!cancelled()", repr(not cancelled))
     python = re.sub(r"needs\.detect\.outputs\.(\w+)", lambda match: repr(outputs.get(match.group(1), "")), python)
     python = re.sub(r"needs\.(\w+)\.result", lambda match: repr(results[match.group(1)]), python)
     python = python.replace("&&", " and ").replace("||", " or ")
-    leftover = re.sub(r"'[^']*'|True|\band\b|\bor\b|==|!=|[()\s]", "", python)
+    leftover = re.sub(r"'[^']*'|True|False|\band\b|\bor\b|==|!=|[()\s]", "", python)
     if leftover:
         raise AssertionError(f"the condition {condition!r} uses {leftover!r}, which this test cannot evaluate")
     return eval(python, {"__builtins__": {}}, {})
 
 
-def _jobs_that_run(outputs, detect_result="success", release_outcome="success"):
+def _jobs_that_run(outputs, detect_result="success", release_outcome="success", cancelled=False):
     """The jobs of release.yml that run after a detect step that ended `detect_result`.
 
     A job whose condition has no status function runs only when every job it needs succeeded.
+    `cancelled` is a run that was cancelled after the detect step ended: a job whose condition
+    is true whatever happened (`always()`) still runs.
     """
     results = {_DETECT: detect_result}
     ran = set() if detect_result != "success" else {_DETECT}
     for job in (_RELEASE_JOB, _ONTOLOGY_JOB):
         condition = _condition(job)
         needed = [results[name] for name in _needs(job)]
-        runs = _holds(condition, outputs, results)
-        if "always()" not in condition:
+        runs = _holds(condition, outputs, results, cancelled)
+        if "always()" not in condition and "!cancelled()" not in condition:
             runs = runs and all(result == "success" for result in needed)
         if runs:
             ran.add(job)
@@ -608,11 +613,40 @@ class OntologyReleaseTest(unittest.TestCase):
         self.assertEqual((outputs["skip"], outputs["ontology_changed"]), ("true", "false"))
         self.assertEqual(_jobs_that_run(outputs), set())
 
-    def test_a_dispatch_releases_the_service_it_names_and_never_the_ontology(self):
+    def test_a_dispatch_for_a_service_releases_that_service_and_not_the_ontology(self):
         status, outputs, stderr, _ = _run_detect([], event_name="workflow_dispatch", service="a")
         self.assertEqual(status, 0, stderr)
         self.assertEqual((outputs["service"], outputs["ontology_changed"]), ("a", "false"))
         self.assertEqual(_jobs_that_run(outputs), {_RELEASE_JOB})
+
+    def test_a_dispatch_for_the_ontology_releases_only_the_ontology(self):
+        status, outputs, stderr, sha = _run_detect([], event_name="workflow_dispatch", service="ontology")
+        self.assertEqual(status, 0, stderr)
+        self.assertEqual((outputs["skip"], outputs["ontology_changed"]), ("true", "true"))
+        self.assertEqual(outputs["tag"], sha)
+        self.assertEqual(outputs["ontology_release_id"], f"rel-{sha}-12-ontology")
+        self.assertEqual(_jobs_that_run(outputs), {_ONTOLOGY_JOB})
+
+    def test_a_dispatch_for_a_name_that_is_no_service_and_not_the_ontology_is_refused(self):
+        status, outputs, text, _ = _run_detect([], event_name="workflow_dispatch", service="nope")
+        self.assertEqual(status, 1)
+        self.assertIn("unknown service 'nope'", text)
+        self.assertNotIn("ontology_changed", outputs)
+
+    def test_the_dispatch_input_says_the_ontology_can_be_released(self):
+        description = re.search(r'\n      service:\n        description: "([^"]*)"', _RELEASE).group(1)
+        self.assertIn("ontology", description)
+
+    def test_a_cancelled_run_does_not_start_the_ontology_job(self):
+        status, outputs, stderr, _ = _run_detect(["ontology/ontology.yaml"])
+        self.assertEqual(status, 0, stderr)
+        self.assertEqual(_jobs_that_run(outputs), {_ONTOLOGY_JOB})
+        self.assertEqual(_jobs_that_run(outputs, cancelled=True), set())
+
+    def test_the_ontology_job_condition_has_no_always(self):
+        condition = _condition(_ONTOLOGY_JOB)
+        self.assertNotIn("always()", condition)
+        self.assertIn("!cancelled()", condition)
 
     def test_the_service_job_condition_is_unchanged(self):
         self.assertEqual(_condition(_RELEASE_JOB), "needs.detect.outputs.skip != 'true'")

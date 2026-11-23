@@ -11,7 +11,9 @@ name: release
 # token, so the release job needs `id-token: write` and the repository must be
 # bound in continuo's `ciAuth.bindings`.
 #
-# Manual dispatch releases a named service at the current main HEAD. It can
+# Manual dispatch releases a named service at the current main HEAD, or, when the
+# name is ontology, the file ontology/ontology.yaml: the way to release it again when
+# the job of its push failed or never started. It can
 # force a bootstrap (promote without validation), or a rebaseline: a bootstrap
 # that also records every seed at its new content hash, so nothing validates and
 # no seed reloads. A rebaseline is the one release per service that continuo's
@@ -31,7 +33,7 @@ on:
   workflow_dispatch:
     inputs:
       service:
-        description: "Service to release (a services/<name> directory)"
+        description: "Service to release (a services/<name> directory), or ontology to release ontology/ontology.yaml (force_bootstrap and rebaseline do not apply to it)"
         required: true
         type: string
       force_bootstrap:
@@ -86,6 +88,19 @@ jobs:
           # changed. A push release derives the service from the diff below.
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             SERVICE="${{ inputs.service }}"
+            # The ontology is not a services/<svc>/ folder. A dispatch for it releases
+            # ontology/ontology.yaml at this commit through release-ontology, and no service.
+            if [ "${SERVICE}" = "ontology" ]; then
+              echo "Dispatched release: the ontology @ ${SHA}"
+              {
+                echo "skip=true"
+                echo "skip_release=true"
+                echo "tag=${SHA}"
+                echo "ontology_changed=true"
+                echo "ontology_release_id=rel-${SHA}-${GITHUB_RUN_NUMBER}-ontology"
+              } >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             if [ ! -d "services/${SERVICE}" ]; then
               echo "::error::unknown service '${SERVICE}' — no services/${SERVICE}/ directory"; exit 1
             fi
@@ -100,7 +115,8 @@ jobs:
             echo "service=${SERVICE}" >> "$GITHUB_OUTPUT"
             echo "kind=${KIND}" >> "$GITHUB_OUTPUT"
             echo "image_tag=${SHA}" >> "$GITHUB_OUTPUT"
-            # A dispatch releases a service; the ontology is released by a push that changes its file.
+            # A dispatch for a service releases that service; the ontology is released by a push that
+            # changes its file, or by a dispatch that names it (above).
             echo "ontology_changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -362,14 +378,14 @@ jobs:
   # release job, when the same push changes a service, so continuo checks the
   # new service contracts against the ontology the service was written for only
   # once the service itself is released; and only when that release succeeded or
-  # was skipped (no service changed). always() lets it run after a skipped
-  # release job; the detect result is named too, so a refused push, where
-  # release is skipped as well, releases nothing. A rejected service release
-  # stops it. The pull request that changes the file ran
+  # was skipped (no service changed). !cancelled() lets it run after a skipped
+  # release job, and not in a cancelled run; the detect result is named too, so a
+  # refused push, where release is skipped as well, releases nothing. A rejected
+  # service release stops it. The pull request that changes the file ran
   # `continuo-contracts ontology check` (ci.yml), so this job runs no check.
   release-ontology:
     needs: [detect, release]
-    if: always() && needs.detect.result == 'success' && needs.detect.outputs.ontology_changed == 'true' && (needs.release.result == 'success' || needs.release.result == 'skipped')
+    if: needs.detect.result == 'success' && !cancelled() && needs.detect.outputs.ontology_changed == 'true' && (needs.release.result == 'success' || needs.release.result == 'skipped')
     runs-on: ubuntu-latest
     # release.sh's own 15-minute POLL_TIMEOUT_SECONDS budget, plus the checkout and the upload.
     timeout-minutes: 20
