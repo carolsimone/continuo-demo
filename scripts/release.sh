@@ -2,8 +2,8 @@
 #
 # release.sh — drive a continuo blue/green release from CD.
 #
-# The calling workflow only builds and pushes the service image. dbt compile and
-# manifest upload happen inside continuo. This script talks to continuo's public
+# For a service, the calling workflow only builds and pushes the image. dbt compile
+# and manifest upload happen inside continuo. This script talks to continuo's public
 # release API (`/api/v1` on the ui, reached at CONTINUO_URL) over HTTPS with a
 # bearer token, and:
 #   1. reads GET /api/v1/current-prod — if current_prod is unseeded, this run is
@@ -22,6 +22,12 @@
 # produce the manifest; the caller never touches S3 for a dbt release. The
 # canonical key <service>/<release_id>/manifest.json is derived by continuo — so
 # it is not sent in the body.
+#
+# The same script releases the ontology file, ontology/ontology.yaml, as the service
+# "ontology" with KIND=ontology. There is no image: the workflow uploads the file to
+# s3://continuo-dev/ontology/<release_id>/ontology.yaml first, as it uploads a
+# python-odcs bundle before its release, and IMAGE_TAG is the short sha of the commit.
+# A push that changes a service and the ontology releases the service first.
 #
 # Authentication. Every call carries `Authorization: Bearer <token>`:
 #   - CONTINUO_TOKEN set: that token is used as is. This is an operator's own

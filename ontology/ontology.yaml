@@ -67,7 +67,8 @@ entities:
 
   Transaction:
     owner: core
-    born_in: kafka.card_events   # the card stream; card-service writes it, flink-transactions reads it
+    born_in: kafka.card_events   # the card stream, written by card-service and read by flink-transactions;
+                                 # neither is declared here and no contract holds the stream, so the order check warns
     # transaction_id is not unique across sources; the key is the pair.
     key: {source: "enum[card, fx]", transaction_id: int}
     properties:
@@ -149,6 +150,9 @@ entities:
       fully_allocated_eur:     {type: money, currency: EUR, derived_from: [UserRevenue.revenue_eur, UserOperationalCost.operational_cost_eur, UserMarketingCost.marketing_cost_eur]}
       ltv_to_cac:              {type: decimal, nullable: true, derived_from: [UserRevenue.revenue_eur, UserOperationalCost.variable_cost_eur, UserMarketingCost.marketing_cost_eur]}
 
-# Aggregates (operational_costs_monthly, marketing_spend_monthly, py_daily_kpis)
-# are not things. They are copies with a period grain, declared on the model
-# (meta.continuo.grain: [month]) with each column's `from:` property.
+# Aggregates (operational_costs_monthly, marketing_spend_monthly, dbt_daily_kpis,
+# dormant_probe, py_daily_kpis) are not things. They are copies with a grain,
+# declared on the model: `meta.continuo.grain: [month]` in dbt, a `grain` property
+# on the schema object in a Python contract. A dbt aggregate also gives each column
+# its `from:` and `agg:`. A Python contract cannot yet: runtime 0.14.0 refuses
+# `period`, `from` and `agg`, so py_daily_kpis binds only its grain.
