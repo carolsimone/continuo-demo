@@ -338,6 +338,7 @@ class DbtLiteCheckTest(unittest.TestCase):
 _CONTRACTS_VERSION = re.compile(r'(?m)^  CONTINUO_CONTRACTS_VERSION: "([^"]*)"$')
 _INSTALL_CONTRACTS = 'uv tool install --python 3.14 "continuo-contracts==${CONTINUO_CONTRACTS_VERSION}"'
 _ONTOLOGY_CHECK = "ontology-check"
+_ONTOLOGY_SERVICES = "ontology-services-check"
 
 
 def _workflow_env(text):
@@ -364,9 +365,9 @@ class ContractsVersionTest(unittest.TestCase):
         )
 
     def test_both_jobs_that_need_the_library_install_it_from_the_env(self):
-        # The two installs are the only `continuo-contracts==` in the workflow.
-        self.assertEqual(len(re.findall(r"continuo-contracts==", _CI)), 2)
-        for job in (_LITE, _ONTOLOGY_CHECK):
+        # The three installs are the only `continuo-contracts==` in the workflow.
+        self.assertEqual(len(re.findall(r"continuo-contracts==", _CI)), 3)
+        for job in (_LITE, _ONTOLOGY_CHECK, _ONTOLOGY_SERVICES):
             with self.subTest(job=job):
                 self.assertIn(f"        run: {_INSTALL_CONTRACTS}\n", _job_text(_CI, job))
 
@@ -452,53 +453,69 @@ def _detect_script(event_name, before, service):
     return re.sub(r"\$\{\{(.*?)\}\}", lambda match: values[match.group(1).strip()], textwrap.dedent(body))
 
 
+def _commit_range(tmp, changed):
+    """Make a git repository in `tmp` whose last commit changes `changed`.
+
+    Returns (repo, git environment, the commit before the change, a function that runs git there).
+    """
+    repo = pathlib.Path(tmp) / "repo"
+    repo.mkdir()
+    env = {
+        "PATH": os.environ["PATH"],
+        "HOME": tmp,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@example.com",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@example.com",
+    }
+
+    def git(*args):
+        done = subprocess.run(["git", *args], cwd=repo, env=env, check=True, capture_output=True, text=True)
+        return done.stdout.strip()
+
+    def write(path, text):
+        (repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (repo / path).write_text(text)
+
+    git("init", "-q", "-b", "main")
+    for path in ("services/a/m.sql", "services/b/m.sql", "ontology/ontology.yaml", "ontology/README.md"):
+        write(path, "v1\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    before = git("rev-parse", "HEAD")
+    for path in changed:
+        write(path, "v2\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "change", "--allow-empty")
+    return repo, env, before, git
+
+
+def _run_step(tmp, repo, env, script, extra_env):
+    """Run a workflow step's shell in `repo`; return (exit status, its outputs, its output text)."""
+    output = pathlib.Path(tmp) / "github_output"
+    output.write_text("")
+    done = subprocess.run(
+        ["bash", "-e", "-c", script],
+        cwd=repo,
+        env={**env, "GITHUB_OUTPUT": str(output), **extra_env},
+        capture_output=True,
+        text=True,
+    )
+    outputs = dict(line.split("=", 1) for line in output.read_text().splitlines() if "=" in line)
+    return done.returncode, outputs, done.stdout + done.stderr
+
+
 def _run_detect(changed, event_name="push", service=""):
     """Run the detect step in a git repository whose last commit changes `changed`.
 
     Returns (exit status, the step's outputs, its output text, the short sha of the last commit).
     """
     with tempfile.TemporaryDirectory() as tmp:
-        repo = pathlib.Path(tmp) / "repo"
-        repo.mkdir()
-        env = {
-            "PATH": os.environ["PATH"],
-            "HOME": tmp,
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_AUTHOR_NAME": "t",
-            "GIT_AUTHOR_EMAIL": "t@example.com",
-            "GIT_COMMITTER_NAME": "t",
-            "GIT_COMMITTER_EMAIL": "t@example.com",
-        }
-
-        def git(*args):
-            done = subprocess.run(["git", *args], cwd=repo, env=env, check=True, capture_output=True, text=True)
-            return done.stdout.strip()
-
-        def write(path, text):
-            (repo / path).parent.mkdir(parents=True, exist_ok=True)
-            (repo / path).write_text(text)
-
-        git("init", "-q", "-b", "main")
-        for path in ("services/a/m.sql", "services/b/m.sql", "ontology/ontology.yaml", "ontology/README.md"):
-            write(path, "v1\n")
-        git("add", "-A")
-        git("commit", "-q", "-m", "base")
-        before = git("rev-parse", "HEAD")
-        for path in changed:
-            write(path, "v2\n")
-        git("add", "-A")
-        git("commit", "-q", "-m", "change", "--allow-empty")
-        output = pathlib.Path(tmp) / "github_output"
-        output.write_text("")
-        done = subprocess.run(
-            ["bash", "-e", "-c", _detect_script(event_name, before, service)],
-            cwd=repo,
-            env={**env, "GITHUB_OUTPUT": str(output), "GITHUB_RUN_NUMBER": "12"},
-            capture_output=True,
-            text=True,
-        )
-        outputs = dict(line.split("=", 1) for line in output.read_text().splitlines() if "=" in line)
-        return done.returncode, outputs, done.stdout + done.stderr, git("rev-parse", "--short", "HEAD")
+        repo, env, before, git = _commit_range(tmp, changed)
+        script = _detect_script(event_name, before, service)
+        status, outputs, text = _run_step(tmp, repo, env, script, {"GITHUB_RUN_NUMBER": "12"})
+        return status, outputs, text, git("rev-parse", "--short", "HEAD")
 
 
 def _condition(job):
@@ -651,3 +668,93 @@ class OntologyReleaseTest(unittest.TestCase):
             job,
         )
         self.assertLess(job.index("CONTINUO_URL }}"), job.index("actions/checkout@v4"))
+
+
+def _single_service_script(base, head):
+    """The shell of check-single-service's check step, with the pull request's two shas filled in."""
+    body = _job_text(_CI, "check-single-service").split("        id: check\n        run: |\n", 1)[1]
+    values = {"github.event.pull_request.base.sha": base, "github.event.pull_request.head.sha": head}
+    return re.sub(r"\$\{\{(.*?)\}\}", lambda match: values[match.group(1).strip()], textwrap.dedent(body))
+
+
+def _run_single_service(changed):
+    with tempfile.TemporaryDirectory() as tmp:
+        repo, env, before, git = _commit_range(tmp, changed)
+        script = _single_service_script(before, git("rev-parse", "HEAD"))
+        return _run_step(tmp, repo, env, script, {})
+
+
+class OntologyChangeChecksEveryServiceTest(unittest.TestCase):
+    def test_a_change_to_the_ontology_file_is_reported_whatever_else_changes(self):
+        cases = (
+            (["ontology/ontology.yaml"], "true"),
+            (["ontology/ontology.yaml", "services/a/m.sql"], "true"),
+            (["services/a/m.sql"], "false"),
+            (["ontology/README.md"], "false"),
+        )
+        for changed, expected in cases:
+            with self.subTest(changed=changed):
+                status, outputs, text = _run_single_service(changed)
+                self.assertEqual(status, 0, text)
+                self.assertEqual(outputs["ontology_changed"], expected)
+
+    def test_the_one_service_rule_is_unchanged_for_a_change_that_names_the_ontology(self):
+        status, outputs, text = _run_single_service(["services/a/m.sql", "ontology/ontology.yaml"])
+        self.assertEqual((status, outputs["service"], outputs["kind"]), (0, "a", "dbt"))
+        status, outputs, text = _run_single_service(["services/a/m.sql", "services/b/m.sql", "ontology/ontology.yaml"])
+        self.assertEqual(status, 1)
+        self.assertIn("this PR touches 2", text)
+
+    def test_check_single_service_exposes_the_output(self):
+        self.assertIn(
+            "      ontology_changed: ${{ steps.check.outputs.ontology_changed }}\n",
+            _job_text(_CI, "check-single-service"),
+        )
+
+    def test_the_estate_job_runs_only_when_the_ontology_file_changed(self):
+        job = _job_text(_CI, _ONTOLOGY_SERVICES)
+        self.assertIn("\n    needs: check-single-service\n", job)
+        self.assertIn("\n    if: needs.check-single-service.outputs.ontology_changed == 'true'\n", job)
+        self.assertNotIn("\n        if:", job)
+        self.assertIn("\n    permissions:\n      contents: read\n", job)
+        self.assertIn("\n    timeout-minutes: 20\n", job)
+
+    def test_the_estate_job_checks_every_dbt_service_against_the_ontology_of_the_checkout(self):
+        step = _step(_CI, "Check every dbt service against the ontology")
+        for command in (
+            "for dir in services/*/; do",
+            'if compgen -G "${dir}contracts/*.odcs.yaml" > /dev/null; then continue; fi',
+            'requirements="$(python3 scripts/image_pins.py dbt-requirements "services/${service}")"',
+            'uv pip install --python "$RUNNER_TEMP/dbt-${service}/bin/python" $requirements',
+            'continuo-contracts dbt check "services/${service}" --dbt "$RUNNER_TEMP/dbt-${service}/bin/dbt" '
+            "--ontology ontology/ontology.yaml",
+        ):
+            with self.subTest(command=command):
+                self.assertIn(command, step)
+        # One failing service does not hide the others, and the step still fails.
+        self.assertIn("|| status=1", step)
+        self.assertTrue(step.rstrip().endswith("exit \"$status\""))
+
+    def test_the_estate_job_checks_every_python_service_against_the_ontology_of_the_checkout(self):
+        step = _step(_CI, "Check every Python service against the ontology")
+        for command in (
+            "for dir in services/*/; do",
+            'if ! compgen -G "${dir}contracts/*.odcs.yaml" > /dev/null; then continue; fi',
+            'version="$(python3 scripts/image_pins.py runtime-version "services/${service}")"',
+            'uv tool install --force "continuo-python-runtime==${version}"',
+            'continuo-runtime validate "services/${service}/contracts" --dialect postgres --service "${service}" '
+            "--ontology ontology/ontology.yaml",
+        ):
+            with self.subTest(command=command):
+                self.assertIn(command, step)
+        self.assertIn("|| status=1", step)
+        self.assertTrue(step.rstrip().endswith("exit \"$status\""))
+
+    def test_the_estate_job_installs_the_library_and_comes_before_the_scripts_job(self):
+        job = _job_text(_CI, _ONTOLOGY_SERVICES)
+        self.assertLess(job.index("actions/checkout@v4"), job.index("astral-sh/setup-uv@v5"))
+        self.assertLess(job.index("astral-sh/setup-uv@v5"), job.index(_INSTALL_CONTRACTS))
+        self.assertLess(job.index(_INSTALL_CONTRACTS), job.index("Check every dbt service"))
+        jobs = re.findall(r"(?m)^  ([a-z][a-z-]*):$", _CI.split("\njobs:\n", 1)[1])
+        self.assertEqual(jobs[-1], "scripts")
+        self.assertLess(jobs.index(_ONTOLOGY_SERVICES), jobs.index("scripts"))
