@@ -1,6 +1,6 @@
 cost_id,cost_date,category,subcategory,cost_type,amount,currency
 1,2023-01-01 00:00:00,COGS,cloud_hosting,variable,805.14,EUR
-2,2023-01-01 00:00:00,COGS,transaction_fees,variable,567.01,EUR
+2,2023-01-01 00:00:00,COGS,transaction_fees,variable,567.01,EUR,extra
 3,2023-01-01 00:00:00,COGS,customer_support,fixed,2685.77,EUR
 4,2023-01-01 00:00:00,R&D,engineering_salaries,fixed,17116.45,EUR
 5,2023-01-01 00:00:00,R&D,product_design,fixed,2868.21,EUR
