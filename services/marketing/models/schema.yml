@@ -86,7 +86,7 @@ models:
       - name: spend_eur
         meta: {continuo: {from: MarketingSpend.amount, agg: sum}}
 
-  - name: table_b
+  - name: table_b_v2
     description: "A copy of marketing_spend_monthly under a name another service already uses, to check the duplicate-table remediation."
     meta: {continuo: {grain: [channel, month]}}
     columns:
