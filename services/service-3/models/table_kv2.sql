@@ -1,2 +1,3 @@
-{{ config(materialized='table', tags=['daily']), tags=['daily']) }}
+{{ config(materialized='table', tags=['daily']) }}
 SELECT * FROM analytics.table_k
+
