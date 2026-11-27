@@ -43,7 +43,7 @@ SELECT
     currency_from,
     currency_to,
     rate,
-    created_at AS transacted_at,
+    created_at,
     rate_date,
     rate_to_eur,
     ROUND((amount * rate_to_eur)::numeric, 2)      AS amount_eur,
