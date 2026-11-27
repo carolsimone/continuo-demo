@@ -8,8 +8,7 @@ rows are computed from seed_user_acquisition.csv (bounty x referrals that
 month), so this script must run after gen_users.py.
 
 Amounts, dates, impressions and clicks are derived from a stable md5 hash of
-(campaign, month), never `random`, so re-running produces no diff. Amounts are
-integer euro cents (amount_cents), the way the ad platforms bill them.
+(campaign, month), never `random`, so re-running produces no diff.
 
 Run from repo root:  uv run python scripts/gen_marketing_spend.py
 """
@@ -112,7 +111,7 @@ def build_rows() -> list[dict]:
                         "channel": channel,
                         "campaign": campaign,
                         "spend_date": f"{month}-01 00:00:00",
-                        "amount_cents": round(REFERRAL_BOUNTY_EUR * referred * 100),
+                        "amount": round(REFERRAL_BOUNTY_EUR * referred, 2),
                         "currency": "EUR",
                         "impressions": 0,  # meaningless for a payout
                         "clicks": 0,
@@ -140,7 +139,7 @@ def build_rows() -> list[dict]:
                     "channel": channel,
                     "campaign": campaign,
                     "spend_date": f"{month}-{day:02d} {hour:02d}:{minute:02d}:00",
-                    "amount_cents": round(amount * 100),
+                    "amount": amount,
                     "currency": "EUR",
                     "impressions": impressions,
                     "clicks": clicks,
