@@ -42,7 +42,7 @@ class BuildRowsTest(unittest.TestCase):
             self.assertTrue(any(d <= day for d in self.by_currency[t["currency_from"]]), msg=str(t))
 
     def test_eur_is_one(self):
-        self.assertTrue(all(r["rate_per_eur"] == 1.0 for r in self.rows if r["currency"] == "EUR"))
+        self.assertTrue(all(r["rate_to_eur"] == 1.0 for r in self.rows if r["currency"] == "EUR"))
 
     def test_rows_are_sorted_by_currency_then_date(self):
         keys = [(r["currency"], r["rate_date"]) for r in self.rows]
