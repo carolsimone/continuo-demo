@@ -73,5 +73,23 @@ class BuildRowsTest(unittest.TestCase):
         self.assertGreater(by_month["2024-12"], by_month["2023-01"])
 
 
+class SaltTest(unittest.TestCase):
+    def test_a_salt_draws_another_dataset_by_the_same_rules(self):
+        import os
+        from unittest import mock
+
+        with mock.patch.dict(os.environ, {"SEED_SALT": "eval-hidden"}):
+            spec = importlib.util.spec_from_file_location("gen_users_salted", _MOD_PATH)
+            salted = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(salted)
+        users, acquisitions = gen.build_rows()
+        salted_users, salted_acquisitions = salted.build_rows()
+        self.assertEqual(len(salted_users), len(users))
+        self.assertNotEqual(
+            [a["channel"] for a in salted_acquisitions],
+            [a["channel"] for a in acquisitions],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

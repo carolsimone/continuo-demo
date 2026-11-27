@@ -17,11 +17,17 @@ Run from repo root:  uv run python scripts/gen_users.py
 """
 import csv
 import hashlib
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 USERS_DST = ROOT / "services" / "core" / "seeds" / "seed_users.csv"
 ACQ_DST = ROOT / "services" / "marketing" / "seeds" / "seed_user_acquisition.csv"
+
+# A non-empty SEED_SALT draws a different dataset from the same rules: the
+# agent-remediation eval grades a fix on data the fix never ran on. Unset, the
+# output is the committed seed.
+SALT_PREFIX = f"{os.environ['SEED_SALT']}|" if os.environ.get("SEED_SALT") else ""
 
 N_USERS = 2000
 
@@ -70,7 +76,7 @@ BIRTH_YEAR_RANGE = (1955, 2003)  # inclusive lower, exclusive upper
 
 def _frac(user_id: int, salt: str) -> float:
     """Deterministic float in [0.0, 1.0). `salt` gives independent draws per field."""
-    h = hashlib.md5(f"{user_id}|{salt}".encode()).hexdigest()
+    h = hashlib.md5(f"{SALT_PREFIX}{user_id}|{salt}".encode()).hexdigest()
     return int(h[:8], 16) / 0x100000000
 
 

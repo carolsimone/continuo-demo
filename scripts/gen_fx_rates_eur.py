@@ -1,20 +1,29 @@
 #!/usr/bin/env python3
-"""Generate services/finance/seeds/seed_fx_rates_eur.csv from core's FX seed.
+"""Generate services/finance/seeds/seed_fx_rates_eur.csv.
 
-One row per distinct (currency_from, created_at::date) pair found in
-seed_fx_transactions.csv. rate_to_eur = base rate per currency + deterministic
-daily jitter (+/- 0.5%). EUR is pinned to exactly 1.0.
+Rates are published on business days only, the way a central bank publishes
+them: one row per currency per weekday, from a week before core's first FX
+transaction (seed_fx_transactions.csv) to its last. A transaction on a weekend
+takes the last rate published before it. rate_to_eur = base rate per currency
++ deterministic daily jitter (+/- 0.5%). EUR is pinned to exactly 1.0.
 
 Run from repo root:  uv run python scripts/gen_fx_rates_eur.py
 """
 import csv
 import hashlib
+import os
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "services" / "core" / "seeds" / "seed_fx_transactions.csv"
 DST = ROOT / "services" / "finance" / "seeds" / "seed_fx_rates_eur.csv"
+
+# A non-empty SEED_SALT draws a different dataset from the same rules: the
+# agent-remediation eval grades a fix on data the fix never ran on. Unset, the
+# output is the committed seed.
+SALT_PREFIX = f"{os.environ['SEED_SALT']}|" if os.environ.get("SEED_SALT") else ""
 
 # Realistic 2024 base rates: 1 unit of <currency> in EUR.
 BASE_RATES = {
@@ -32,10 +41,14 @@ BASE_RATES = {
 
 JITTER = 0.005  # +/- 0.5%
 
+# Rates start this many days before the first transaction, so a transaction on
+# the window's first weekend still has a rate published before it.
+LEAD_DAYS = 7
+
 
 def _jitter_factor(currency: str, date: str) -> float:
     """Deterministic multiplier in [1 - JITTER, 1 + JITTER] from a stable hash."""
-    h = hashlib.md5(f"{currency}{date}".encode()).hexdigest()
+    h = hashlib.md5(f"{SALT_PREFIX}{currency}{date}".encode()).hexdigest()
     frac = int(h[:8], 16) / 0xFFFFFFFF  # 0.0 .. 1.0
     return 1.0 + (frac * 2 - 1) * JITTER  # -JITTER .. +JITTER
 
@@ -48,19 +61,24 @@ def rate_to_eur(currency: str, date: str) -> float:
 
 
 def build_rows(txns: Iterable[dict]) -> list[dict]:
-    """txns: iterable of dicts with 'currency_from' and 'created_at'.
-    Returns a sorted, deduped list of {'currency','rate_date','rate_to_eur'} rows.
+    """txns: iterable of dicts with 'created_at'.
+    Returns one {'currency','rate_date','rate_to_eur'} row per currency per
+    weekday of the transactions' window, sorted by currency then date.
     """
-    pairs = set()
-    for t in txns:
-        currency = t["currency_from"]
-        date = t["created_at"][:10]
-        pairs.add((currency, date))
-    rows = [
+    days = sorted(t["created_at"][:10] for t in txns)
+    first = date.fromisoformat(days[0]) - timedelta(days=LEAD_DAYS)
+    last = date.fromisoformat(days[-1])
+    weekdays = []
+    day = first
+    while day <= last:
+        if day.weekday() < 5:
+            weekdays.append(day.isoformat())
+        day += timedelta(days=1)
+    return [
         {"currency": c, "rate_date": d, "rate_to_eur": rate_to_eur(c, d)}
-        for (c, d) in sorted(pairs)
+        for c in sorted(BASE_RATES)
+        for d in weekdays
     ]
-    return rows
 
 
 def main():

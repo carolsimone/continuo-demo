@@ -28,6 +28,7 @@ Run from repo root (AFTER gen_users.py):
 import csv
 import hashlib
 import importlib.util
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -35,6 +36,11 @@ ROOT = Path(__file__).resolve().parents[1]
 ACQ_SRC = ROOT / "services" / "marketing" / "seeds" / "seed_user_acquisition.csv"
 CARD_DST = ROOT / "services" / "core" / "seeds" / "seed_card_transactions.csv"
 FX_DST = ROOT / "services" / "core" / "seeds" / "seed_fx_transactions.csv"
+
+# A non-empty SEED_SALT draws a different dataset from the same rules: the
+# agent-remediation eval grades a fix on data the fix never ran on. Unset, the
+# output is the committed seed.
+SALT_PREFIX = f"{os.environ['SEED_SALT']}|" if os.environ.get("SEED_SALT") else ""
 
 
 def _load_fx_rates():
@@ -73,7 +79,7 @@ MERCHANTS = [
 
 def _frac(key: str, salt: str) -> float:
     """Deterministic float in [0.0, 1.0)."""
-    h = hashlib.md5(f"{key}|{salt}".encode()).hexdigest()
+    h = hashlib.md5(f"{SALT_PREFIX}{key}|{salt}".encode()).hexdigest()
     return int(h[:8], 16) / 0x100000000
 
 

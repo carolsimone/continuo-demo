@@ -12,10 +12,16 @@ Run from repo root:  uv run python scripts/gen_operational_costs.py
 """
 import csv
 import hashlib
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DST = ROOT / "services" / "finance" / "seeds" / "seed_operational_costs.csv"
+
+# A non-empty SEED_SALT draws a different dataset from the same rules: the
+# agent-remediation eval grades a fix on data the fix never ran on. Unset, the
+# output is the committed seed.
+SALT_PREFIX = f"{os.environ['SEED_SALT']}|" if os.environ.get("SEED_SALT") else ""
 
 YEARS = (2023, 2024)  # MUST match gen_users.py and gen_marketing_spend.py
 
@@ -51,7 +57,7 @@ JITTER = 0.08  # deterministic +/-8% wobble around the trend line
 
 def _frac(subcategory: str, month: str) -> float:
     """Deterministic float in [0.0, 1.0] from a stable hash."""
-    h = hashlib.md5(f"{subcategory}|{month}".encode()).hexdigest()
+    h = hashlib.md5(f"{SALT_PREFIX}{subcategory}|{month}".encode()).hexdigest()
     return int(h[:8], 16) / 0xFFFFFFFF
 
 
