@@ -4,8 +4,8 @@
 # models + tests), then asserts the row shapes the models are supposed to have.
 # Exits non-zero on the first failure. Gate every marketing push on it.
 #
-# marketing reads only its own seeds, so unlike the finance smoke there is no
-# cross-service upstream to stub.
+# fx_activity_by_channel reads finance's fx_transactions_eur cross-service, so
+# that table is stubbed with one row.
 set -euo pipefail
 
 IMG=marketing-models-smoke
@@ -35,9 +35,15 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 
-echo "== create analytics schema =="
+echo "== create analytics schema + the finance cross-service upstream stub =="
 docker exec -i "$PG" psql -U continuo_svc -d continuo_dbt <<'SQL'
 CREATE SCHEMA IF NOT EXISTS analytics;
+DROP TABLE IF EXISTS analytics.fx_transactions_eur;
+CREATE TABLE analytics.fx_transactions_eur (
+  transaction_id int, user_id int, created_at timestamp,
+  amount_eur numeric, fee_amount_eur numeric
+);
+INSERT INTO analytics.fx_transactions_eur VALUES (1, 1, '2023-02-15 10:00:00', 92.00, 0.46);
 SQL
 
 echo "== dbt build (seeds + models + tests) =="

@@ -1,27 +1,5 @@
 {{ config(materialized='table', tags=['daily']) }}
 
--- Per-user acquisition cost: each channel-month's spend divided evenly across
--- the users that channel acquired that month. One row per user_id.
---
--- Worked example: a user acquired via affiliate in June 2023, where affiliate
--- spent 100 EUR that month and acquired 10 users, carries 10 EUR.
---
--- Two deliberate behaviours:
---   * Every acquired user gets a row. organic is the only channel with no
---     spend by nature, so it costs 0 rather than NULL -- we know the value,
---     it is zero. referral is paid: it carries the per-signup bounty as its
---     exact cost (enforced by assert_referral_cac_equals_bounty), not zero.
---     Operational costs are a separate component (finance's
---     operational_cost_per_user) combined alongside this one in
---     ltv_per_user; that combination must not overwrite marketing_cost_eur.
---   * Spend in a channel-month that acquired nobody stays UNALLOCATED -- it has
---     no user to attach to and simply produces no row here. So
---     SUM(marketing_cost_eur) < SUM(marketing_spend_monthly.spend_eur), by
---     design. Query marketing_spend_monthly for the full spend picture.
---
--- Rounding to cents means a cohort's per-user costs can sum to a few cents off
--- that cohort's spend. Accepted; a residual-allocation scheme is not worth it.
-
 WITH acquisitions AS (
 
     SELECT
@@ -36,7 +14,6 @@ WITH acquisitions AS (
 
 cohort_size AS (
 
-    -- How many users each channel acquired in each month -- the divisor.
     SELECT
         channel,
         acquisition_month,
@@ -48,8 +25,6 @@ cohort_size AS (
 
 paid_channels AS (
 
-    -- A channel is "paid" iff we have ever spent on it. Derived from the data
-    -- rather than hardcoded, so adding a channel to the spend seed is enough.
     SELECT DISTINCT channel
     FROM {{ ref('marketing_spend_monthly') }}
 
