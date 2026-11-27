@@ -49,7 +49,7 @@ models:
     description: "Operational costs rolled up to one row per month, with COGS/R&D/G&A breakdown columns."
     meta: {continuo: {grain: [month]}}
     columns:
-      - name: period_start
+      - name: cost_month
         description: "First day of the calendar month the costs fall in."
         meta: {continuo: {period: month, from: OperationalCost.cost_date}}
         tests:
