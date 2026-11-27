@@ -59,9 +59,31 @@ class BuildRowsTest(unittest.TestCase):
              "rate", "created_at", "fee_amount"],
         )
 
-    def test_every_fee_is_positive(self):
-        for row in self.card + self.fx:
+    def test_every_purchase_fee_is_positive(self):
+        for row in [r for r in self.card if r["amount"] > 0] + self.fx:
             self.assertGreater(row["fee_amount"], 0, msg=str(row))
+
+    def test_a_refund_negates_an_earlier_purchase(self):
+        refunds = [r for r in self.card if r["amount"] < 0]
+        self.assertGreater(len(refunds), 0)
+        purchases = {}
+        for r in self.card:
+            if r["amount"] > 0:
+                purchases.setdefault((r["user_id"], r["receiver"], -r["amount"], -r["fee_amount"]), []).append(r)
+        for refund in refunds:
+            key = (refund["user_id"], refund["receiver"], refund["amount"], refund["fee_amount"])
+            refunded = datetime.datetime.strptime(refund["created_at"], "%Y-%m-%d %H:%M:%S")
+            earlier = [
+                p for p in purchases.get(key, [])
+                if datetime.timedelta(0) < refunded - datetime.datetime.strptime(p["created_at"], "%Y-%m-%d %H:%M:%S")
+                <= datetime.timedelta(days=gen.REFUND_WITHIN_DAYS)
+            ]
+            self.assertTrue(earlier, msg=str(refund))
+
+    def test_some_users_never_transact(self):
+        active = {r["user_id"] for r in self.card + self.fx}
+        dormant_share = 1 - len(active) / len(self.acquisitions)
+        self.assertAlmostEqual(dormant_share, gen.DORMANT_SHARE, delta=0.015)
 
     def test_card_fee_tracks_the_take_rate(self):
         blended = sum(r["fee_amount"] for r in self.card) / sum(r["amount"] for r in self.card)
