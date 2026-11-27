@@ -4,8 +4,11 @@
 Rates are published on business days only, the way a central bank publishes
 them: one row per currency per weekday, from a week before core's first FX
 transaction (seed_fx_transactions.csv) to its last. A transaction on a weekend
-takes the last rate published before it. rate_to_eur = base rate per currency
-+ deterministic daily jitter (+/- 0.5%). EUR is pinned to exactly 1.0.
+takes the last rate published before it.
+
+The seed follows the ECB convention: rate_per_eur is how many units of the
+currency one euro buys, 1 / rate_to_eur, where rate_to_eur = base rate per
+currency + deterministic daily jitter (+/- 0.5%). EUR is pinned to exactly 1.0.
 
 Run from repo root:  uv run python scripts/gen_fx_rates_eur.py
 """
@@ -75,7 +78,7 @@ def build_rows(txns: Iterable[dict]) -> list[dict]:
             weekdays.append(day.isoformat())
         day += timedelta(days=1)
     return [
-        {"currency": c, "rate_date": d, "rate_to_eur": rate_to_eur(c, d)}
+        {"currency": c, "rate_date": d, "rate_per_eur": round(1 / rate_to_eur(c, d), 6)}
         for c in sorted(BASE_RATES)
         for d in weekdays
     ]
@@ -86,7 +89,7 @@ def main():
         txns = list(csv.DictReader(f))
     rows = build_rows(txns)
     with DST.open("w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["currency", "rate_date", "rate_to_eur"])
+        w = csv.DictWriter(f, fieldnames=["currency", "rate_date", "rate_per_eur"])
         w.writeheader()
         w.writerows(rows)
     print(f"Wrote {len(rows)} rows to {DST.relative_to(ROOT)}")
