@@ -20,7 +20,7 @@ models:
         meta: {continuo: {from: MarketingSpend.amount, agg: sum}}
         tests:
           - not_null
-      - name: campaign_count
+      - name: campaigns
         description: "Number of campaign-level seed rows rolled into this channel-month."
         meta: {continuo: {from: MarketingSpend, agg: count}}
         tests:
