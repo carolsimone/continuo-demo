@@ -5,7 +5,7 @@ WITH acquisitions AS (
     SELECT
         user_id::int  AS user_id,
         channel
-    FROM {{ ref('seed_user_acquisition') }}
+    FROM analytics.seed_user_acquisition
 
 ),
 
@@ -15,7 +15,7 @@ fx AS (
         user_id,
         DATE_TRUNC('month', created_at::timestamp)::date  AS fx_month,
         amount_eur,
-        fee_ammount_eur
+        fee_amount_eur
     FROM analytics.fx_transactions_eur
 
 ),

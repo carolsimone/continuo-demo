@@ -8,8 +8,8 @@ WITH monthly AS (
         spend_eur,
         impressions,
         clicks,
-        campaign_count
-    FROM {{ ref('marketing_spend_monthly') }}
+        campaigns AS campaign_count
+    FROM analytics.marketing_spend_monthly
 
 ),
 
