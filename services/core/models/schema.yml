@@ -45,7 +45,8 @@ models:
           - not_null
       - name: transaction_count
         meta: {continuo: {local: true}}
-      - name: revenue_eur
+      - name: fee_revenue_eur
+        meta: {continuo: {property: UserRevenue.revenue_eur}}
         tests:
           - not_null
       - name: gross_volume_eur
