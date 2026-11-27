@@ -15,7 +15,7 @@ fx AS (
         user_id,
         DATE_TRUNC('month', created_at::timestamp)::date  AS fx_month,
         amount_eur,
-        fee_amount_eur
+        fee_ammount_eur
     FROM analytics.fx_transactions_eur
 
 ),
