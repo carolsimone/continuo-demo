@@ -66,6 +66,12 @@ CREATE TABLE analytics.marketing_cost_per_user (
   user_id int, channel text, campaign text, acquired_at timestamp,
   acquisition_month date, channel_is_paid boolean, marketing_cost_eur numeric
 );
+-- Read by ltv_cac_by_channel_cohort for payback. Empty: no user pays back.
+DROP TABLE IF EXISTS analytics.user_activity_monthly;
+CREATE TABLE analytics.user_activity_monthly (
+  user_id int, activity_month date, months_since_acquisition int,
+  cumulative_fee_revenue_eur numeric
+);
 SQL
 
 echo "== load real core seed_users (2000 users, 2023-01..2024-12) =="
