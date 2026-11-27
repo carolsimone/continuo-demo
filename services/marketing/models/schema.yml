@@ -155,9 +155,7 @@ seeds:
         description: "Campaign the spend row belongs to, for example gad_brand or refer_a_friend."
       - name: spend_date
         description: "Timestamp of the spend row; referral rows sit on the first day of the month at midnight."
-      - name: amount_cents
-        description: "Spend in euro cents."
-        meta: {continuo: {local: true}}
+      - name: amount
         tests:
           - not_null
       - name: currency
