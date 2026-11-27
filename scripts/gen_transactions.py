@@ -8,8 +8,7 @@ seed_user_acquisition.csv, so run gen_users.py first.
 fee_amount is the reason this generator exists. Before it, every transaction
 model carried gross volume -- what customers moved -- and nothing carried what
 the company earned on it, which made LTV uncomputable. The fee cannot be
-inferred from the other columns: seed_fx_rates_eur only ever covers
-currency_from, so no cross-rate can be built from the seed alone.
+inferred from the other columns.
 
 Card fees are EUR. FX fees are denominated in currency_from, so
 fx_transactions_eur converts them with the same rate_to_eur join it already
@@ -62,6 +61,17 @@ TX_WINDOW_END = "2025-07"  # exclusive; transactions run through 2025-06
 TARGET_TX = 12000
 CARD_SHARE = 0.60
 
+# Users who sign up and never transact: revenue_per_user still carries them,
+# with zero revenue.
+DORMANT_SHARE = 0.03
+
+# Card purchases the customer later gets refunded. A refund is its own card
+# row: the purchase's amount and fee, negated, at the same merchant, within
+# REFUND_WITHIN_DAYS of the purchase and before the window ends. The fee goes
+# back with the purchase, so a user's net revenue never drops below zero.
+REFUND_SHARE = 0.02
+REFUND_WITHIN_DAYS = 30
+
 CARD_TAKE_RATE = 0.002  # ~interchange
 FX_TAKE_RATE = 0.005    # ~retail FX spread
 FEE_JITTER = 0.15       # +/-15% around the take rate, per transaction
@@ -104,6 +114,8 @@ def build_rows(acquisitions: list[dict]) -> tuple[list[dict], list[dict]]:
 
     tenures: dict[int, tuple[datetime, float]] = {}
     for a in acquisitions:
+        if _frac(a["user_id"], "dormant") < DORMANT_SHARE:
+            continue
         acquired = datetime.strptime(a["acquired_at"], "%Y-%m-%d %H:%M:%S")
         days = max((window_end - acquired).total_seconds() / 86400.0, 1.0)
         tenures[int(a["user_id"])] = (acquired, days)
@@ -130,7 +142,7 @@ def build_rows(acquisitions: list[dict]) -> tuple[list[dict], list[dict]]:
 
             if _frac(key, "kind") < CARD_SHARE:
                 amount = round(_lerp(*CARD_AMOUNT_RANGE, _frac(key, "amount")), 2)
-                card.append({
+                purchase = {
                     "transaction_id": 0,  # renumbered below
                     "user_id": user_id,
                     "amount": amount,
@@ -138,7 +150,17 @@ def build_rows(acquisitions: list[dict]) -> tuple[list[dict], list[dict]]:
                     "receiver": MERCHANTS[int(_frac(key, "merchant") * len(MERCHANTS))],
                     "created_at": created_at,
                     "fee_amount": _fee(amount, CARD_TAKE_RATE, key),
-                })
+                }
+                card.append(purchase)
+                if _frac(key, "refund") < REFUND_SHARE:
+                    refunded = created + timedelta(days=1 + _frac(key, "refund_day") * (REFUND_WITHIN_DAYS - 1))
+                    if refunded < window_end:
+                        card.append(dict(
+                            purchase,
+                            amount=-purchase["amount"],
+                            fee_amount=-purchase["fee_amount"],
+                            created_at=refunded.strftime("%Y-%m-%d %H:%M:%S"),
+                        ))
             else:
                 ccy_from = CURRENCIES[int(_frac(key, "from") * len(CURRENCIES))]
                 ccy_to = CURRENCIES[int(_frac(key, "to") * len(CURRENCIES))]

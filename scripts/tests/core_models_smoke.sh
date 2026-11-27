@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Local functional smoke for the core revenue models. Builds the core image,
-# stands up an ephemeral postgres, stubs the cross-service upstream
-# (analytics.fx_transactions_eur, produced by finance), runs `dbt build`, then
+# stands up an ephemeral postgres, stubs the cross-service upstreams
+# (analytics.fx_transactions_eur, produced by finance, and service-py's two
+# tables), runs `dbt build`, then
 # asserts the row shapes. Exits non-zero on the first failure.
 set -euo pipefail
 
@@ -46,6 +47,11 @@ CREATE TABLE analytics.fx_transactions_eur (
 -- or assert_transactions_after_acquisition fails the build.
 INSERT INTO analytics.fx_transactions_eur VALUES
   (1, 1, 100, 0.5, 'USD', 'EUR', 0.92, '2025-01-15 10:00:00', 0.92, 92.00, 0.46);
+-- service-py's tables, which read_order, read_order_v2 and dbt_daily_kpis copy.
+DROP TABLE IF EXISTS analytics.demo_orders_csv;
+CREATE TABLE analytics.demo_orders_csv (order_id int, customer text, amount numeric);
+DROP TABLE IF EXISTS analytics.py_daily_kpis;
+CREATE TABLE analytics.py_daily_kpis (day date, tx_count bigint, total_amount numeric);
 SQL
 
 echo "== dbt seed =="
@@ -53,6 +59,14 @@ docker run --rm --network "$NET" \
   -e POSTGRES_HOST="$PG" -e POSTGRES_PORT=5432 \
   -e POSTGRES_DB=continuo_dbt -e POSTGRES_USER=continuo_svc -e POSTGRES_PASSWORD=runner \
   --entrypoint dbt "$IMG" seed --profiles-dir /project
+
+echo "== dbt run read_order =="
+# read_order_v2 reads read_order by its raw name, so dbt does not order the
+# two; build read_order first.
+docker run --rm --network "$NET" \
+  -e POSTGRES_HOST="$PG" -e POSTGRES_PORT=5432 \
+  -e POSTGRES_DB=continuo_dbt -e POSTGRES_USER=continuo_svc -e POSTGRES_PASSWORD=runner \
+  --entrypoint dbt "$IMG" run -s read_order --profiles-dir /project
 
 echo "== dbt build (seeds + models + tests) =="
 docker run --rm --network "$NET" \

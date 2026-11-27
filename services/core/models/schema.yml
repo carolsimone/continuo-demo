@@ -2,33 +2,33 @@ version: 2
 
 models:
   - name: daily_transactions
-    description: "Basic union of core card transactions and finance FX transactions, valued in EUR. transaction_id is not unique across sources; use `source` to disambiguate."
+    description: "Card and FX transactions in one table, valued in EUR. transaction_id is unique within a source, not across sources."
     meta:
       continuo:
         entity: Transaction               # union of both sources; `source` is part of the key
         readers: [finance, analytics]
     columns:
       - name: transaction_id
-        description: "Source-local transaction id (not unique across sources)."
+        description: "Source-local transaction id."
         tests:
           - not_null
       - name: user_id
       - name: amount_eur
-        description: "Transaction value in EUR. Card amounts are treated as already-EUR; FX amounts come pre-converted from fx_transactions_eur."
+        description: "Transaction value in EUR. Negative for a card refund."
         tests:
           - not_null
       - name: fee_amount_eur
-        description: "Revenue: the fee the company earned on this transaction, in EUR. Card fees are already EUR; FX fees come pre-converted from fx_transactions_eur."
+        description: "Fee on the transaction, in EUR. A card refund returns its purchase's fee."
         tests:
           - not_null
       - name: created_at
       - name: source
-        description: "Origin of the row: 'card' (seed_card_transactions) or 'fx' (analytics.fx_transactions_eur)."
+        description: "card or fx."
         tests:
           - not_null
 
   - name: revenue_per_user
-    description: "Per-user realized revenue over the observation window: the fees the company earned, not the volume the customer moved. One row per user; users with no transactions carry revenue_eur 0. Input to finance's ltv_per_user."
+    description: "One row per user: transaction count, volume and fee revenue over the observation window. Input to finance's ltv_per_user."
     meta:
       continuo:
         entity: UserRevenue
@@ -46,16 +46,87 @@ models:
       - name: transaction_count
         meta: {continuo: {local: true}}
       - name: revenue_eur
-        description: "Sum of fee_amount_eur across this user's transactions. Zero for users with none."
         tests:
           - not_null
       - name: gross_volume_eur
-        description: "Sum of amount_eur. Carried beside revenue_eur so the volume/revenue distinction stays visible."
         tests:
           - not_null
       - name: first_transaction_at
         meta: {continuo: {local: true}}
       - name: last_transaction_at
+        meta: {continuo: {local: true}}
+
+  - name: user_activity_monthly
+    description: "One row per user per month, from the user's acquisition month to the last month with any transaction, with the user's running fee revenue. Input to finance's ltv_cac_by_channel_cohort."
+    meta:
+      continuo:
+        grain: [user, month]
+        readers: [finance]
+    columns:
+      - name: user_id
+        meta: {continuo: {from: Transaction.user_id}}
+        tests:
+          - not_null
+      - name: activity_month
+        meta: {continuo: {period: month, from: Transaction.created_at}}
+        tests:
+          - not_null
+      - name: acquisition_month
+        meta: {continuo: {local: true}}
+        tests:
+          - not_null
+      - name: months_since_acquisition
+        meta: {continuo: {local: true}}
+        tests:
+          - not_null
+      - name: transaction_count
+        meta: {continuo: {from: Transaction, agg: count}}
+        tests:
+          - not_null
+      - name: volume_eur
+        meta: {continuo: {from: Transaction.amount_eur, agg: sum}}
+        tests:
+          - not_null
+      - name: fee_revenue_eur
+        meta: {continuo: {from: Transaction.fee_amount_eur, agg: sum}}
+        tests:
+          - not_null
+      - name: cumulative_fee_revenue_eur
+        meta: {continuo: {local: true}}
+        tests:
+          - not_null
+      - name: is_active
+        meta: {continuo: {local: true}}
+      - name: was_active_last_month
+        meta: {continuo: {local: true}}
+
+  - name: fx_corridor_monthly
+    description: "FX volume and fee revenue per currency pair per month, valued in EUR."
+    meta: {continuo: {grain: [currency_from, currency_to, month]}}
+    columns:
+      - name: currency_from
+        meta: {continuo: {local: true}}
+        tests:
+          - not_null
+      - name: currency_to
+        meta: {continuo: {local: true}}
+        tests:
+          - not_null
+      - name: fx_month
+        meta: {continuo: {period: month, from: Transaction.created_at}}
+        tests:
+          - not_null
+      - name: transaction_count
+        meta: {continuo: {from: Transaction, agg: count}}
+      - name: active_users
+        meta: {continuo: {local: true}}
+      - name: volume_eur
+        meta: {continuo: {from: Transaction.amount_eur, agg: sum}}
+      - name: fee_revenue_eur
+        meta: {continuo: {from: Transaction.fee_amount_eur, agg: sum}}
+      - name: take_rate
+        meta: {continuo: {local: true}}
+      - name: share_of_month_volume
         meta: {continuo: {local: true}}
 
   - name: read_order
@@ -84,7 +155,7 @@ models:
 
 seeds:
   - name: seed_card_transactions
-    description: "Card transaction seed rows, one row per transaction, in EUR. Generated by scripts/gen_transactions.py — edit that script, not this CSV."
+    description: "Card transaction seed rows, one row per transaction, in EUR. A refund is its own row, with the purchase's amount and fee negated. Generated by scripts/gen_transactions.py — edit that script, not this CSV."
     meta:
       continuo:
         entity: Transaction
@@ -106,7 +177,7 @@ seeds:
       - name: created_at
         description: "Timestamp when the transaction was created."
       - name: fee_amount
-        description: "Fee the company earned on this transaction, in EUR (card transactions have no currency conversion)."
+        description: "Fee on the transaction, in EUR."
         meta: {continuo: {property: Transaction.fee_amount_eur}}
         tests:
           - not_null
@@ -141,7 +212,7 @@ seeds:
       - name: created_at
         description: "Timestamp when the transaction was created."
       - name: fee_amount
-        description: "Fee the company earned on this transaction, denominated in currency_from before EUR conversion in finance's fx_transactions_eur."
+        description: "Fee on the transaction, denominated in currency_from."
         meta: {continuo: {local: true}}
         tests:
           - not_null
