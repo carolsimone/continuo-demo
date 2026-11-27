@@ -25,7 +25,7 @@ class BuildRowsTest(unittest.TestCase):
         self.assertEqual(
             list(self.rows[0].keys()),
             ["spend_id", "channel", "campaign", "spend_date",
-             "amount", "currency", "impressions", "clicks"],
+             "amount_cents", "currency", "impressions", "clicks"],
         )
 
     def test_spend_id_is_sequential_from_one(self):
@@ -61,12 +61,12 @@ class BuildRowsTest(unittest.TestCase):
             if r["channel"] == "referral":
                 continue
             lo, hi = gen.CHANNEL_AMOUNT_RANGE[r["channel"]]
-            self.assertGreaterEqual(r["amount"], lo)
-            self.assertLessEqual(r["amount"], hi)
+            self.assertGreaterEqual(r["amount_cents"] / 100, lo)
+            self.assertLessEqual(r["amount_cents"] / 100, hi)
 
     def test_amount_rounded_to_cents(self):
         for r in self.rows:
-            self.assertEqual(r["amount"], round(r["amount"], 2))
+            self.assertIsInstance(r["amount_cents"], int)
 
     def test_clicks_never_exceed_impressions(self):
         # referral rows carry no impressions/clicks (a payout, not an ad
@@ -104,7 +104,7 @@ class BuildRowsTest(unittest.TestCase):
                 continue
             month = row["spend_date"][:7]
             self.assertAlmostEqual(
-                row["amount"], round(gen.REFERRAL_BOUNTY_EUR * referrals[month], 2), places=2
+                row["amount_cents"], round(gen.REFERRAL_BOUNTY_EUR * referrals[month] * 100), places=0
             )
 
     def test_referral_rows_carry_no_impressions_or_clicks(self):
