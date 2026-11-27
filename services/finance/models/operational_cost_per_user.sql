@@ -30,5 +30,5 @@ SELECT
 FROM acquisitions a
 INNER JOIN cohort_size c
     ON c.acquisition_month = a.acquisition_month
-INNER JOIN {{ ref('operational_costs_monthly') }} m
-    ON m.cost_month = a.acquisition_month
+INNER JOIN analytics.operational_costs_monthly m
+    ON m.period_start = a.acquisition_month
