@@ -15,8 +15,8 @@ WITH acquisition_window AS (
 )
 
 SELECT
-    m.cost_month
+    m.period_start
 FROM {{ ref('operational_costs_monthly') }} m
 CROSS JOIN acquisition_window w
-WHERE m.cost_month < w.first_month
-   OR m.cost_month > w.last_month
+WHERE m.period_start < w.first_month
+   OR m.period_start > w.last_month

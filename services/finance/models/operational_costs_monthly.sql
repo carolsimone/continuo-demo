@@ -1,7 +1,7 @@
 {{ config(materialized='table', tags=['daily']) }}
 
 SELECT
-    {{ first_of_month('cost_date') }}                                AS cost_month,
+    {{ first_of_month('cost_date') }}                                AS period_start,
     ROUND(SUM(amount::numeric), 2)                                   AS total_cost_eur,
     ROUND(SUM(amount::numeric) FILTER (WHERE category = 'COGS'), 2)  AS cogs_eur,
     ROUND(SUM(amount::numeric) FILTER (WHERE category = 'R&D'), 2)   AS rd_eur,
