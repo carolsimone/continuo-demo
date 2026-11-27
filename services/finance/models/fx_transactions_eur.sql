@@ -25,8 +25,8 @@ rated AS (
     LEFT JOIN LATERAL (
         SELECT
             rate_date,
-            rate_to_eur
-        FROM {{ ref('seed_fx_rates_eur') }}
+            rate_per_eur AS rate_to_eur
+        FROM analytics.seed_fx_rates_eur
         WHERE currency = t.currency_from
           AND rate_date <= t.created_at::date
         ORDER BY rate_date DESC
