@@ -46,9 +46,9 @@ CREATE TABLE analytics.seed_fx_transactions (
   currency_from text, currency_to text, rate numeric, created_at date,
   fee_amount numeric
 );
--- created_at must land on a (currency, rate_date) pair that actually exists in
--- seeds/seed_fx_rates_eur.csv, otherwise fx_transactions_eur's LEFT JOIN
--- yields NULL rate_to_eur/amount_eur and its not_null tests fail the build.
+-- created_at must fall on or after a rate_date of its currency in
+-- seeds/seed_fx_rates_eur.csv, otherwise fx_transactions_eur finds no rate and
+-- its not_null tests fail the build.
 INSERT INTO analytics.seed_fx_transactions VALUES
   ('t1','u1',100,'USD','EUR',0.9,'2023-02-15',0.5);
 DROP TABLE IF EXISTS analytics.seed_users;
@@ -100,9 +100,8 @@ FROM analytics.seed_users;
 SQL
 
 echo "== dbt seed (separate invocation, mirroring continuo's node-by-node orchestration) =="
-# fx_transactions_eur references its seed by raw name (analytics.seed_fx_rates_eur),
-# so dbt's DAG doesn't order the seed first. In production continuo drives each
-# node itself via customname-dbt verbs; the smoke mirrors that by seeding before build.
+# In production continuo drives each node itself via customname-dbt verbs; the
+# smoke mirrors that by seeding before build.
 docker run --rm --network "$NET" \
   -e POSTGRES_HOST="$PG" -e POSTGRES_PORT=5432 \
   -e POSTGRES_DB=continuo_dbt -e POSTGRES_USER=continuo_svc -e POSTGRES_PASSWORD=runner \

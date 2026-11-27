@@ -1,60 +1,17 @@
 {{ config(materialized='table', tags=['daily']) }}
 
--- Per-user operational cost: each month's total operational cost divided
--- evenly across the users acquired that month. One row per user_id.
---
--- Worked example: if a month's costs totalled 100 EUR and we acquired 100
--- users that month, each of those users carries 1 EUR.
---
--- The user source is core's seed_users, read as a raw schema-qualified name
--- per the repo's cross-service rule (never ref() across services) -- the same
--- pattern fx_transactions_eur uses for analytics.seed_fx_transactions. dbt
--- does not see the dependency; build ordering across services is the
--- platform's concern.
---
--- Two deliberate behaviours:
---   * Costs in a month with zero signups would stay UNALLOCATED -- there is
---     no user to attach them to and they would simply produce no row here.
---     Today that's 0 of 24 months: the cost window and the acquisition
---     window are identical (2023-01..2024-12), so every cost month has a
---     matching cohort. When SUM(operational_cost_eur) differs from
---     SUM(total_cost_eur) today, it's per-user cent rounding across cohorts,
---     not unallocated months -- query operational_costs_monthly for the full
---     cost picture. A cost month drifting OUTSIDE the acquisition window
---     entirely is a data bug and is caught by
---     assert_operational_costs_within_acquisition_window; a cost month
---     silently going missing while still INSIDE the window would instead
---     surface as a dropped cohort here, caught by
---     assert_ltv_covers_every_revenue_user downstream in ltv_per_user.
---   * users_in_cohort is carried as a column so a reader can reconstruct the
---     division without re-deriving the cohort.
---
--- Rounding to cents means a cohort's per-user costs can sum a few cents off
--- the month's total. Accepted; a residual-allocation scheme is not worth it.
---
--- variable_cost_eur is the same allocation applied to the variable lines
--- only. It is what ltv_per_user subtracts from revenue to get contribution
--- margin; operational_cost_eur (the total) feeds fully_allocated_eur instead.
---
--- Known simplification: variable cost is allocated by acquisition cohort like
--- everything else here, not by the user's own transaction volume. Per-user-
--- month amortization was ruled out of scope by this model's original design
--- (decision 5) and that still holds.
-
 WITH acquisitions AS (
 
     SELECT
-        user_id::int                                      AS user_id,
-        created_at::timestamp                             AS acquired_at,
-        DATE_TRUNC('month', created_at::timestamp)::date  AS acquisition_month
+        user_id::int                        AS user_id,
+        created_at::timestamp               AS acquired_at,
+        {{ first_of_month('created_at') }}  AS acquisition_month
     FROM analytics.seed_users
 
 ),
 
 cohort_size AS (
 
-    -- How many users were acquired in each month -- the divisor. No channel
-    -- dimension: operational costs are company-wide (spec decision 4).
     SELECT
         acquisition_month,
         COUNT(*) AS users_acquired
@@ -67,9 +24,9 @@ SELECT
     a.user_id,
     a.acquired_at,
     a.acquisition_month,
-    c.users_acquired                                AS users_in_cohort,
-    ROUND(m.total_cost_eur / c.users_acquired, 2)   AS operational_cost_eur,
-    ROUND(m.variable_cost_eur / c.users_acquired, 2)  AS variable_cost_eur
+    c.users_acquired                                              AS users_in_cohort,
+    {{ safe_divide('m.total_cost_eur', 'c.users_acquired') }}     AS operational_cost_eur,
+    {{ safe_divide('m.variable_cost_eur', 'c.users_acquired') }}  AS variable_cost_eur
 FROM acquisitions a
 INNER JOIN cohort_size c
     ON c.acquisition_month = a.acquisition_month

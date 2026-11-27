@@ -2,12 +2,12 @@ version: 2
 
 models:
   - name: fx_transactions_eur
-    description: "FX transactions with amount restated in EUR via seed_fx_rates_eur."
+    description: "FX transactions with amount and fee restated in EUR via seed_fx_rates_eur."
     meta:
       continuo:
         entity: Transaction
         filter: {source: fx}              # the fx rows only, now valued in EUR
-        readers: [core]                   # core's daily_transactions unions it in
+        readers: [core, marketing]
     columns:
       - name: transaction_id
         tests:
@@ -17,7 +17,7 @@ models:
       - name: amount
         meta: {continuo: {local: true}}
       - name: fee_amount
-        description: "Fee the company earned, denominated in currency_from."
+        description: "Fee on the transaction, denominated in currency_from."
         meta: {continuo: {local: true}}
         tests:
           - not_null
@@ -28,23 +28,25 @@ models:
       - name: rate
         meta: {continuo: {local: true}}
       - name: created_at
-      - name: rate_to_eur
-        description: "Multiplier applied to amount; NULL means an uncovered (currency, date) pair."
-        meta: {continuo: {property: FxRate.rate_to_eur}}   # via (currency_from, created_at::date)
+      - name: rate_date
+        description: "Date of the rate applied: the transaction's date, or the last business day before it."
+        meta: {continuo: {local: true}}
         tests:
           - not_null
-      - name: amount_converted_eur
-        meta: {continuo: {local: true}}                    # the same value as amount_eur, kept for existing readers
+      - name: rate_to_eur
+        description: "Multiplier applied to amount."
+        meta: {continuo: {property: FxRate.rate_to_eur}}   # via (currency_from, rate_date)
+        tests:
+          - not_null
       - name: amount_eur
         tests:
           - not_null
       - name: fee_amount_eur
-        description: "fee_amount converted to EUR on the same rate_to_eur join as amount_eur."
         tests:
           - not_null
 
   - name: operational_costs_monthly
-    description: "Operational costs rolled up to one row per month, with COGS/R&D/G&A breakdown columns. Source of the monthly totals that operational_cost_per_user divides across users acquired that month. All amounts are EUR."
+    description: "Operational costs rolled up to one row per month, with COGS/R&D/G&A breakdown columns."
     meta: {continuo: {grain: [month]}}
     columns:
       - name: cost_month
@@ -54,7 +56,6 @@ models:
           - unique
           - not_null
       - name: total_cost_eur
-        description: "Total operational cost for the month, in EUR, rounded to cents. Equals cogs_eur + rd_eur + ga_eur, and also equals variable_cost_eur + fixed_cost_eur."
         meta: {continuo: {from: OperationalCost.amount, agg: sum}}
         tests:
           - not_null
@@ -65,50 +66,41 @@ models:
       - name: ga_eur
         meta: {continuo: {from: OperationalCost.amount, agg: sum, where: {category: "G&A"}}}
       - name: variable_cost_eur
-        description: "The variable share (cloud hosting, transaction fees) of the month's operational cost, in EUR. The basis for the per-user variable_cost_eur that ltv_per_user subtracts from revenue to get contribution margin."
         meta: {continuo: {from: OperationalCost.amount, agg: sum, where: {cost_type: variable}}}
         tests:
           - not_null
       - name: fixed_cost_eur
-        description: "The fixed share (e.g. salaries, customer support) of the month's operational cost, in EUR. Excluded from contribution margin in ltv_per_user; belongs in a fully-allocated view instead."
         meta: {continuo: {from: OperationalCost.amount, agg: sum, where: {cost_type: fixed}}}
         tests:
           - not_null
       - name: cost_line_count
-        description: "Number of cost-line seed rows rolled into this month."
         meta: {continuo: {from: OperationalCost, agg: count}}
         tests:
           - not_null
 
   - name: operational_cost_per_user
-    description: "Per-user operational cost: each month's total operational cost divided evenly across the users acquired that month (from core's seed_users, read cross-service). One row per user. A cost month with zero signups would be unallocated and absent here; today every one of the 24 cost months has a matching cohort, so any gap between this table's total and operational_costs_monthly's total is per-user cent rounding, not unallocated months. Per-user costs within a cohort can sum a few cents off the month's total due to rounding. Counterpart of marketing's marketing_cost_per_user; both feed ltv_per_user."
+    description: "Per-user operational cost: each month's operational cost divided evenly across the users acquired that month (core's seed_users, read cross-service). One row per user."
     meta: {continuo: {entity: UserOperationalCost}}
     columns:
       - name: user_id
-        description: "Matches core.seed_users.user_id, marketing's marketing_cost_per_user.user_id, and finance's transaction user ids."
         tests:
           - unique
           - not_null
       - name: acquired_at
-        description: "Exact timestamp the user was acquired (seed_users.created_at), before truncation to acquisition_month."
         meta: {continuo: {property: User.created_at}}
         tests:
           - not_null
       - name: acquisition_month
-        description: "First day of the month the user was acquired; the month whose total cost is divided."
         tests:
           - not_null
       - name: users_in_cohort
-        description: "How many users were acquired in that month -- the divisor. Carried so the division can be reconstructed without re-deriving the cohort."
         meta: {continuo: {local: true}}
         tests:
           - not_null
       - name: operational_cost_eur
-        description: "The user's even share of their acquisition month's total operational cost, in EUR. Always positive; never NULL."
         tests:
           - not_null
       - name: variable_cost_eur
-        description: "The variable share (cloud hosting, transaction fees) of this user's allocated operational cost. Subtracted from revenue to get contribution margin in ltv_per_user."
         tests:
           - not_null
 
@@ -126,7 +118,7 @@ models:
       - name: variable_cost_eur
 
   - name: ltv_per_user
-    description: "Per-user unit economics. contribution_margin_eur (revenue minus variable cost) is the standard LTV numerator and drives ltv_to_cac; fully_allocated_eur additionally subtracts fixed operational cost and is negative for essentially every user, which is the honest picture for a company at this stage. One row per user. Reads core and marketing cross-service by raw schema-qualified name."
+    description: "Per-user unit economics: revenue, allocated operational and marketing cost, contribution margin and LTV:CAC. One row per user. Reads core and marketing cross-service."
     meta:
       continuo:
         entity: UserLtv
@@ -153,19 +145,17 @@ models:
       - name: marketing_cost_eur
         meta: {continuo: {property: UserMarketingCost.marketing_cost_eur}}
       - name: contribution_margin_eur
-        description: "revenue_eur - variable_cost_eur. The LTV numerator."
         tests:
           - not_null
       - name: fully_allocated_eur
-        description: "revenue_eur - operational_cost_eur - marketing_cost_eur. Expected negative."
         tests:
           - not_null
       - name: ltv_to_cac
-        description: "contribution_margin_eur / marketing_cost_eur. NULL for organic users, who have zero CAC."
+        description: "NULL for users with zero marketing cost."
 
 seeds:
   - name: seed_fx_rates_eur
-    description: "Per-(currency, date) rate to convert a currency amount into EUR."
+    description: "Rate to convert one unit of a currency into EUR, per currency per business day. Generated by scripts/gen_fx_rates_eur.py — edit that script, not this CSV."
     meta: {continuo: {entity: FxRate}}
     columns:
       - name: currency
@@ -199,7 +189,7 @@ seeds:
         tests:
           - not_null
       - name: currency
-        description: "Always EUR. The accepted_values test pins the no-conversion assumption in operational_costs_monthly."
+        description: "Always EUR."
         meta: {continuo: {local: true}}             # pinned to EUR by the test below
         tests:
           - not_null
