@@ -27,8 +27,7 @@ models:
         meta: {continuo: {local: true}}
       - name: rate
         meta: {continuo: {local: true}}
-      - name: transacted_at
-        meta: {continuo: {property: Transaction.created_at}}
+      - name: created_at
       - name: rate_date
         description: "Date of the rate applied: the transaction's date, or the last business day before it."
         meta: {continuo: {local: true}}
