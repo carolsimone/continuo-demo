@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate services/marketing/seeds/seed_marketing_spend.csv.
+"""Generate projects/marketing/seeds/seed_marketing_spend.csv.
 
 One row per (campaign, month) for 2023-01 .. 2024-12 — the window covered by
 seed_user_acquisition. Spend and acquisition must overlap, otherwise
@@ -18,8 +18,8 @@ import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DST = ROOT / "services" / "marketing" / "seeds" / "seed_marketing_spend.csv"
-ACQ_SRC = ROOT / "services" / "marketing" / "seeds" / "seed_user_acquisition.csv"
+DST = ROOT / "projects" / "marketing" / "seeds" / "seed_marketing_spend.csv"
+ACQ_SRC = ROOT / "projects" / "marketing" / "seeds" / "seed_user_acquisition.csv"
 
 # A non-empty SEED_SALT draws a different dataset from the same rules: the
 # agent-remediation eval grades a fix on data the fix never ran on. Unset, the
@@ -61,7 +61,7 @@ CHANNEL_AMOUNT_RANGE = {
 }
 
 # Paid to the referrer for each referred signup. Mirrored as
-# `vars: referral_bounty_eur` in services/marketing/dbt_project.yml;
+# `vars: referral_bounty_eur` in projects/marketing/dbt_project.yml;
 # assert_referral_cac_equals_bounty.sql fails the build if they drift apart.
 REFERRAL_BOUNTY_EUR = 25.0
 

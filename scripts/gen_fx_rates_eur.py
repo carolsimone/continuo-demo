@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate services/finance/seeds/seed_fx_rates_eur.csv.
+"""Generate projects/finance/seeds/seed_fx_rates_eur.csv.
 
 Rates are published on business days only, the way a central bank publishes
 them: one row per currency per weekday, from a week before core's first FX
@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "services" / "core" / "seeds" / "seed_fx_transactions.csv"
-DST = ROOT / "services" / "finance" / "seeds" / "seed_fx_rates_eur.csv"
+SRC = ROOT / "projects" / "core" / "seeds" / "seed_fx_transactions.csv"
+DST = ROOT / "projects" / "finance" / "seeds" / "seed_fx_rates_eur.csv"
 
 # A non-empty SEED_SALT draws a different dataset from the same rules: the
 # agent-remediation eval grades a fix on data the fix never ran on. Unset, the

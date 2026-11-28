@@ -1,0 +1,13 @@
+name: project_2
+version: '1.0.2'
+config-version: 2
+profile: default
+
+model-paths: ["models"]
+
+models:
+  project_2:
+    +materialized: table
+    +meta:
+      owner: "test"
+      criticality: "CORE"

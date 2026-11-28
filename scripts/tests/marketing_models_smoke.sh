@@ -4,7 +4,7 @@
 # models + tests), then asserts the row shapes the models are supposed to have.
 # Exits non-zero on the first failure. Gate every marketing push on it.
 #
-# fx_activity_by_channel reads finance's fx_transactions_eur cross-service, so
+# fx_activity_by_channel reads finance's fx_transactions_eur cross-project, so
 # that table is stubbed with one row.
 set -euo pipefail
 
@@ -21,7 +21,7 @@ trap cleanup EXIT
 cleanup
 
 echo "== build marketing image (real Dockerfile) =="
-docker build -t "$IMG" -f "$ROOT/services/marketing/Dockerfile" "$ROOT/services/marketing"
+docker build -t "$IMG" -f "$ROOT/projects/marketing/Dockerfile" "$ROOT/projects/marketing"
 
 echo "== start ephemeral postgres =="
 docker network create "$NET" >/dev/null
@@ -35,7 +35,7 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 
-echo "== create analytics schema + the finance cross-service upstream stub =="
+echo "== create analytics schema + the finance cross-project upstream stub =="
 docker exec -i "$PG" psql -U continuo_svc -d continuo_dbt <<'SQL'
 CREATE SCHEMA IF NOT EXISTS analytics;
 DROP TABLE IF EXISTS analytics.fx_transactions_eur;

@@ -4,7 +4,7 @@ import unittest
 
 # Load the CLI module by path; translate() must import without dbt installed
 # (dbtRunner is imported lazily inside main()).
-_MOD_PATH = pathlib.Path(__file__).resolve().parents[2] / "services" / "finance" / "customname_dbt.py"
+_MOD_PATH = pathlib.Path(__file__).resolve().parents[2] / "projects" / "finance" / "customname_dbt.py"
 _spec = importlib.util.spec_from_file_location("customname_dbt", _MOD_PATH)
 customname_dbt = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(customname_dbt)

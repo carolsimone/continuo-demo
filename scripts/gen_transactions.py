@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Generate the two transaction seeds, carrying the fee the company earns.
 
-Writes services/core/seeds/seed_card_transactions.csv and
-services/core/seeds/seed_fx_transactions.csv. Reads
+Writes projects/core/seeds/seed_card_transactions.csv and
+projects/core/seeds/seed_fx_transactions.csv. Reads
 seed_user_acquisition.csv, so run gen_users.py first.
 
 fee_amount is the reason this generator exists. Before it, every transaction
@@ -32,9 +32,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-ACQ_SRC = ROOT / "services" / "marketing" / "seeds" / "seed_user_acquisition.csv"
-CARD_DST = ROOT / "services" / "core" / "seeds" / "seed_card_transactions.csv"
-FX_DST = ROOT / "services" / "core" / "seeds" / "seed_fx_transactions.csv"
+ACQ_SRC = ROOT / "projects" / "marketing" / "seeds" / "seed_user_acquisition.csv"
+CARD_DST = ROOT / "projects" / "core" / "seeds" / "seed_card_transactions.csv"
+FX_DST = ROOT / "projects" / "core" / "seeds" / "seed_fx_transactions.csv"
 
 # A non-empty SEED_SALT draws a different dataset from the same rules: the
 # agent-remediation eval grades a fix on data the fix never ran on. Unset, the

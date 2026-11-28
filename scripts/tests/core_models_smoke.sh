@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Local functional smoke for the core revenue models. Builds the core image,
-# stands up an ephemeral postgres, stubs the cross-service upstreams
-# (analytics.fx_transactions_eur, produced by finance, and service-py's two
+# stands up an ephemeral postgres, stubs the cross-project upstreams
+# (analytics.fx_transactions_eur, produced by finance, and project-py's two
 # tables), runs `dbt build`, then
 # asserts the row shapes. Exits non-zero on the first failure.
 set -euo pipefail
@@ -19,7 +19,7 @@ trap cleanup EXIT
 cleanup
 
 echo "== build core image (real Dockerfile) =="
-docker build -t "$IMG" -f "$ROOT/services/core/Dockerfile" "$ROOT/services/core"
+docker build -t "$IMG" -f "$ROOT/projects/core/Dockerfile" "$ROOT/projects/core"
 
 echo "== start ephemeral postgres =="
 docker network create "$NET" >/dev/null
@@ -33,7 +33,7 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 
-echo "== stub the finance cross-service upstream =="
+echo "== stub the finance cross-project upstream =="
 docker exec -i "$PG" psql -U continuo_svc -d continuo_dbt <<'SQL'
 CREATE SCHEMA IF NOT EXISTS analytics;
 DROP TABLE IF EXISTS analytics.fx_transactions_eur;
@@ -47,7 +47,7 @@ CREATE TABLE analytics.fx_transactions_eur (
 -- or assert_transactions_after_acquisition fails the build.
 INSERT INTO analytics.fx_transactions_eur VALUES
   (1, 1, 100, 0.5, 'USD', 'EUR', 0.92, '2025-01-15 10:00:00', 0.92, 92.00, 0.46);
--- service-py's tables, which read_order, read_order_v2 and dbt_daily_kpis copy.
+-- project-py's tables, which read_order, read_order_v2 and dbt_daily_kpis copy.
 DROP TABLE IF EXISTS analytics.demo_orders_csv;
 CREATE TABLE analytics.demo_orders_csv (order_id int, customer text, amount numeric);
 DROP TABLE IF EXISTS analytics.py_daily_kpis;

@@ -22,7 +22,7 @@ _SCRIPT = pathlib.Path(__file__).resolve().parents[2] / "scripts" / "release.sh"
 
 _PROMOTED = {
     "release_id": "rel-1",
-    "service": "svc",
+    "project": "proj",
     "status": "promoted",
     "terminal": True,
     "ui_url": "https://continuo.example.com/releases/rel-1",
@@ -43,8 +43,8 @@ def _sequence(answer):
 class _Stub:
     """A scripted continuo ui."""
 
-    def __init__(self, current_prod=None, post=None, polls=None, oidc=None, path_prefix=""):
-        self.current_prod = _sequence(current_prod or (200, {"current_prod_release_id": "rel-0"}))
+    def __init__(self, live_release=None, post=None, polls=None, oidc=None, path_prefix=""):
+        self.live_release = _sequence(live_release or (200, {"live_release_id": "rel-0"}))
         self.post = _sequence(post or (202, {"release_id": "rel-1", "status": "received"}))
         self.polls = _sequence(polls or (200, _PROMOTED))
         self.oidc = _sequence(oidc or (200, None))
@@ -88,8 +88,8 @@ class _Stub:
                 path = self.path.removeprefix(stub.path_prefix)
                 with stub._lock:
                     stub.requests.append(("GET", path, dict(self.headers), None))
-                    if path == "/api/v1/current-prod":
-                        answer = take(stub.current_prod)
+                    if path == "/api/v1/live-release":
+                        answer = take(stub.live_release)
                     else:
                         answer = take(stub.polls)
                 return self._reply(*answer)
@@ -131,7 +131,7 @@ def _run_release_at(url, extra_env=None, drop_env=()):
         CONTINUO_URL=url,
         CONTINUO_TOKEN="test",
         RELEASE_ID="rel-1",
-        SERVICE="svc",
+        PROJECT="proj",
         IMAGE_TAG="abc1234",
         POLL_INTERVAL="0",
         RETRY_DELAY="0",
@@ -174,7 +174,7 @@ class ReleaseShTest(unittest.TestCase):
             json.loads(body),
             {
                 "release_id": "rel-1",
-                "service": "svc",
+                "project": "proj",
                 "image_tag": "abc1234",
                 "bootstrap": False,
                 "repo": "carolsimone/continuo-demo",
@@ -198,28 +198,28 @@ class ReleaseShTest(unittest.TestCase):
 
     def test_ontology_kind_adds_kind_to_the_body(self):
         with _Stub() as stub:
-            result = _run_release(stub, {"KIND": "ontology", "SERVICE": "ontology"})
+            result = _run_release(stub, {"KIND": "ontology", "PROJECT": "ontology"})
 
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         body = json.loads(stub.posts()[0][3])
-        self.assertEqual((body["kind"], body["service"]), ("ontology", "ontology"))
+        self.assertEqual((body["kind"], body["project"]), ("ontology", "ontology"))
 
-    def test_python_odcs_kind_adds_kind_to_the_body(self):
+    def test_python_kind_adds_kind_to_the_body(self):
         with _Stub() as stub:
-            result = _run_release(stub, {"KIND": "python-odcs"})
+            result = _run_release(stub, {"KIND": "python"})
 
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-        self.assertEqual(json.loads(stub.posts()[0][3])["kind"], "python-odcs")
+        self.assertEqual(json.loads(stub.posts()[0][3])["kind"], "python")
 
     def test_an_unknown_kind_stops_the_script(self):
-        # `python` is refused too: continuo's release-controller has no such kind.
-        for value in ("python", "pythn", "Python", "python-odcs ", "odcs", "Ontology", "ontology "):
+        # The old kind name is refused: continuo reads a Python project as the kind `python`.
+        for value in ("python" + "-odcs", "pythn", "Python", "python ", "odcs", "Ontology", "ontology "):
             with self.subTest(kind=value), _Stub() as stub:
                 result = _run_release(stub, {"KIND": value})
 
                 self.assertEqual(result.returncode, 2)
                 self.assertIn(
-                    f'release.sh: unknown KIND "{value}": expected dbt, python-odcs or ontology',
+                    f'release.sh: unknown KIND "{value}": expected dbt, python or ontology',
                     result.stderr,
                 )
                 self.assertEqual(stub.requests, [])
@@ -232,7 +232,7 @@ class ReleaseShTest(unittest.TestCase):
         self.assertNotIn("kind", json.loads(stub.posts()[0][3]))
 
     def test_unseeded_prod_bootstraps(self):
-        with _Stub(current_prod=(200, {"current_prod_release_id": ""})) as stub:
+        with _Stub(live_release=(200, {"live_release_id": ""})) as stub:
             result = _run_release(stub)
 
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
@@ -257,7 +257,7 @@ class ReleaseShTest(unittest.TestCase):
             json.loads(stub.posts()[0][3]),
             {
                 "release_id": "rel-1",
-                "service": "svc",
+                "project": "proj",
                 "image_tag": "abc1234",
                 "bootstrap": True,
                 "rebaseline": True,
@@ -267,15 +267,15 @@ class ReleaseShTest(unittest.TestCase):
         )
         self.assertIn("rebaseline=true -> bootstrap=true", result.stdout)
 
-    def test_python_odcs_rebaseline_keeps_the_kind(self):
+    def test_python_rebaseline_keeps_the_kind(self):
         with _Stub() as stub:
             result = _run_release(
-                stub, {"REBASELINE": "true", "KIND": "python-odcs", "IMAGE_TAG": "docker.io/u/service-py:4e5f6a7"}
+                stub, {"REBASELINE": "true", "KIND": "python", "IMAGE_TAG": "docker.io/u/project-py:4e5f6a7"}
             )
 
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         body = json.loads(stub.posts()[0][3])
-        self.assertEqual((body["kind"], body["bootstrap"], body["rebaseline"]), ("python-odcs", True, True))
+        self.assertEqual((body["kind"], body["bootstrap"], body["rebaseline"]), ("python", True, True))
 
     def test_rebaseline_false_sends_no_rebaseline_field(self):
         with _Stub() as stub:
@@ -306,9 +306,9 @@ class ReleaseShTest(unittest.TestCase):
         self.assertEqual(len(stub.posts()), 1)
         self.assertFalse([r for r in stub.requests if r[1].startswith("/api/v1/releases/")])
 
-    def test_failed_current_prod_read_does_not_bootstrap(self):
+    def test_failed_live_release_read_does_not_bootstrap(self):
         error = {"error": "token rejected", "code": "invalid_token"}
-        with _Stub(current_prod=(401, error)) as stub:
+        with _Stub(live_release=(401, error)) as stub:
             result = _run_release(stub)
 
         self.assertEqual(result.returncode, 1)
@@ -336,7 +336,7 @@ class ReleaseShTest(unittest.TestCase):
     def test_a_rejected_release_prints_the_contracts_version(self):
         rejected = {
             "release_id": "rel-4e5f6a7-213",
-            "service": "service-py",
+            "project": "project-py",
             "status": "rejected",
             "terminal": True,
             "bootstrap": False,
@@ -348,7 +348,7 @@ class ReleaseShTest(unittest.TestCase):
             "continuo_contracts": "0.2.0",
         }
         with _Stub(polls=[(200, rejected)]) as stub:
-            result = _run_release(stub, {"KIND": "python-odcs"})
+            result = _run_release(stub, {"KIND": "python"})
 
         self.assertEqual(result.returncode, 1)
         self.assertIn("reject_reason: invalid_contract", result.stderr)
@@ -373,7 +373,7 @@ class ReleaseShTest(unittest.TestCase):
     def test_bootstrap_not_allowed_explains_the_operator_action(self):
         refused = {"error": "bootstrap is not permitted", "code": "bootstrap_not_allowed"}
         with _Stub(
-            current_prod=(200, {"current_prod_release_id": ""}), post=(403, refused)
+            live_release=(200, {"live_release_id": ""}), post=(403, refused)
         ) as stub:
             result = _run_release(stub)
 
@@ -404,10 +404,10 @@ class ReleaseShTest(unittest.TestCase):
         self.assertIn("transient failure", result.stderr)
         self.assertEqual(len(stub.posts()), 1)
 
-    def test_transient_503_on_current_prod_is_retried(self):
+    def test_transient_503_on_the_live_release_read_is_retried(self):
         unavailable = (503, {"error": "upstream down", "code": "upstream_unavailable"})
         with _Stub(
-            current_prod=[unavailable, (200, {"current_prod_release_id": "rel-0"})]
+            live_release=[unavailable, (200, {"live_release_id": "rel-0"})]
         ) as stub:
             result = _run_release(stub)
 
@@ -424,12 +424,12 @@ class ReleaseShTest(unittest.TestCase):
 
     def test_retries_run_out_on_a_persistent_503(self):
         unavailable = (503, {"error": "upstream down", "code": "upstream_unavailable"})
-        with _Stub(current_prod=unavailable) as stub:
+        with _Stub(live_release=unavailable) as stub:
             result = _run_release(stub)
 
         self.assertEqual(result.returncode, 1)
         self.assertIn("upstream_unavailable", result.stderr)
-        self.assertEqual(len([r for r in stub.requests if r[1] == "/api/v1/current-prod"]), 4)
+        self.assertEqual(len([r for r in stub.requests if r[1] == "/api/v1/live-release"]), 4)
         self.assertEqual(stub.posts(), [])
 
     def test_retries_run_out_when_continuo_is_unreachable(self):
@@ -452,7 +452,7 @@ class ReleaseShTest(unittest.TestCase):
 
     def test_429_honours_retry_after(self):
         limited = (429, {"error": "slow down", "code": "rate_limited"}, {"Retry-After": "1"})
-        with _Stub(current_prod=[limited, (200, {"current_prod_release_id": "rel-0"})]) as stub:
+        with _Stub(live_release=[limited, (200, {"live_release_id": "rel-0"})]) as stub:
             started = time.monotonic()
             result = _run_release(stub)
             elapsed = time.monotonic() - started
@@ -463,7 +463,7 @@ class ReleaseShTest(unittest.TestCase):
 
     def test_429_without_retry_after_waits_the_rate_limit_delay(self):
         limited = (429, {"error": "slow down", "code": "rate_limited"})
-        with _Stub(current_prod=[limited, (200, {"current_prod_release_id": "rel-0"})]) as stub:
+        with _Stub(live_release=[limited, (200, {"live_release_id": "rel-0"})]) as stub:
             result = _run_release(stub, {"RATE_LIMIT_DELAY": "1"})
 
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
@@ -471,7 +471,7 @@ class ReleaseShTest(unittest.TestCase):
 
     def test_an_oversized_retry_after_is_capped_without_shell_errors(self):
         limited = (429, {"error": "slow down", "code": "rate_limited"}, {"Retry-After": "9" * 30})
-        with _Stub(current_prod=[limited, (200, {"current_prod_release_id": "rel-0"})]) as stub:
+        with _Stub(live_release=[limited, (200, {"live_release_id": "rel-0"})]) as stub:
             result = _run_release(stub, {"POLL_TIMEOUT_SECONDS": "5"})
 
         # The capped 60s wait does not fit the 5s budget, so the read fails.
@@ -587,7 +587,7 @@ class ReleaseShTest(unittest.TestCase):
             )
 
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-        # current-prod, POST and one poll: one token each.
+        # the live release, the POST and one poll: one token each.
         self.assertEqual(len(stub.oidc_calls), 3)
         for query, headers in stub.oidc_calls:
             params = urllib.parse.parse_qs(query)
@@ -615,7 +615,7 @@ class ReleaseShTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         for query, _ in stub.oidc_calls:
             self.assertEqual(urllib.parse.parse_qs(query)["audience"], [stub.url])
-        self.assertEqual(stub.requests[0][1], "/api/v1/current-prod")
+        self.assertEqual(stub.requests[0][1], "/api/v1/live-release")
 
     def _oidc_env(self, stub):
         return {
@@ -644,7 +644,7 @@ class ReleaseShTest(unittest.TestCase):
 
     def test_oidc_failure_mid_poll_counts_as_a_failed_poll(self):
         pending = (200, {"release_id": "rel-1", "status": "validating", "terminal": False})
-        # Calls 1-2 (current-prod, POST) and the first poll succeed; the token
+        # Calls 1-2 (the live release, the POST) and the first poll succeed; the token
         # requests for the next poll fail through all their retries.
         oidc = [(200, None)] * 3 + [(503, {"message": "down"})] * 4 + [(200, None)]
         with _Stub(polls=[pending, (200, _PROMOTED)], oidc=oidc) as stub:
@@ -676,6 +676,14 @@ class ReleaseShTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 1)
         self.assertIn("CONTINUO_TOKEN", result.stderr)
+        self.assertEqual(stub.requests, [])
+
+    def test_a_missing_project_fails_before_any_request(self):
+        with _Stub() as stub:
+            result = _run_release(stub, drop_env=("PROJECT",))
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("PROJECT must be set", result.stderr)
         self.assertEqual(stub.requests, [])
 
     def test_token_is_never_printed(self):

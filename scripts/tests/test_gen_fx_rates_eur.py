@@ -20,7 +20,7 @@ gen = _load("gen_fx_rates_eur")
 class BuildRowsTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        with (_ROOT / "services" / "core" / "seeds" / "seed_fx_transactions.csv").open(newline="") as f:
+        with (_ROOT / "projects" / "core" / "seeds" / "seed_fx_transactions.csv").open(newline="") as f:
             cls.txns = list(csv.DictReader(f))
         cls.rows = gen.build_rows(cls.txns)
         cls.by_currency = {}

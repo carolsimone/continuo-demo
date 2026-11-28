@@ -1,18 +1,18 @@
 # The demo's ontology: the company-wide vocabulary of what its data is about
 # (entities) and who acts on it (principals). continuo-demo is its own ontology
 # repository, so this file is the one the demo releases and the one every
-# service's CI checks its contracts against.
+# project's CI checks its contracts against.
 #
 # How it is released: a push to main that changes this file is released as the
-# service `ontology`, kind `ontology` (.github/workflows/release.yml), after the
-# release of the one service the same push may change. Its pull request is
+# project `ontology`, kind `ontology` (.github/workflows/release.yml), after the
+# release of the one project the same push may change. Its pull request is
 # checked by `continuo-contracts ontology check ontology/ontology.yaml`
-# (.github/workflows/ci.yml). continuo checks the contracts of every service
-# declared under `principals.services` and no others, so a service is declared
+# (.github/workflows/ci.yml). continuo checks the contracts of every project
+# declared under `principals.projects` and no others, so a project is declared
 # in the pull request that binds all of its nodes.
 #
 # Company-wide ontology for the demo estate. One file, two kinds of entity:
-#   principals: who acts on data (domains, services, teams, roles, people)
+#   principals: who acts on data (domains, projects, teams, roles, people)
 #   entities:   what the data is about (things), with their properties
 #
 # Rules:
@@ -38,11 +38,11 @@ principals:
     finance:   {owner_team: finance-data}
     marketing: {owner_team: marketing-data}
     analytics: {owner_team: analytics-eng}
-  services:
+  projects:
     core: {domain: core}
     finance: {domain: finance}
     marketing: {domain: marketing}
-    service-py: {domain: analytics}
+    project-py: {domain: analytics}
   teams:
     core-data:      {idp_group: "okta:core-data"}
     finance-data:   {idp_group: "okta:finance-data"}
@@ -112,7 +112,7 @@ entities:
       acquired_at: {type: timestamp}
 
   Order:
-    owner: analytics          # born in service-py's demo_orders_csv node
+    owner: analytics          # born in project-py's demo_orders_csv node
     key: {order_id: int}
     properties:
       customer: {type: string}

@@ -1,4 +1,4 @@
-"""Tests for scripts/image_pins.py, which reads the pins a service image declares."""
+"""Tests for scripts/image_pins.py, which reads the pins a project image declares."""
 
 import importlib.util
 import io
@@ -12,12 +12,12 @@ image_pins = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(image_pins)
 
 _RUNTIME = "ghcr.io/carolsimone/continuo-python-runtime-postgres"
-_SERVICE_PY = f"# The python service image.\nFROM {_RUNTIME}:v0.12.0\nCOPY contracts/ /app/contracts/\n"
+_PROJECT_PY = f"# The python project image.\nFROM {_RUNTIME}:v0.12.0\nCOPY contracts/ /app/contracts/\n"
 _UV_TOOL_LIST = "continuo-python-runtime v0.12.0\n- continuo-runtime\n"
 
 
-def _service_dir(**files: str) -> pathlib.Path:
-    """A temporary service directory; the keyword Dockerfile_local writes Dockerfile.local."""
+def _project_dir(**files: str) -> pathlib.Path:
+    """A temporary project directory; the keyword Dockerfile_local writes Dockerfile.local."""
     path = pathlib.Path(tempfile.mkdtemp())
     for name, text in files.items():
         (path / name.replace("_local", ".local")).write_text(text)
@@ -26,7 +26,7 @@ def _service_dir(**files: str) -> pathlib.Path:
 
 class RuntimeVersionTest(unittest.TestCase):
     def test_reads_the_version_of_the_runtime_base_image(self):
-        self.assertEqual(image_pins.runtime_version(_SERVICE_PY), "0.12.0")
+        self.assertEqual(image_pins.runtime_version(_PROJECT_PY), "0.12.0")
 
     def test_accepts_platform_flag_stage_name_lowercase_keyword_and_crlf(self):
         text = "from --platform=linux/amd64 ghcr.io/carolsimone/continuo-python-runtime-trino:v1.2.3 AS base\r\n"
@@ -45,7 +45,7 @@ class RuntimeVersionTest(unittest.TestCase):
 
     def test_refuses_two_runtime_base_images(self):
         with self.assertRaisesRegex(image_pins.PinError, "2 FROM lines"):
-            image_pins.runtime_version(_SERVICE_PY + f"FROM {_RUNTIME}:v0.11.0\n")
+            image_pins.runtime_version(_PROJECT_PY + f"FROM {_RUNTIME}:v0.11.0\n")
 
 
 class InstalledRuntimeVersionTest(unittest.TestCase):
@@ -60,43 +60,43 @@ class InstalledRuntimeVersionTest(unittest.TestCase):
 class RuntimeCommandsTest(unittest.TestCase):
     def test_runtime_version_prints_only_the_version(self):
         out = io.StringIO()
-        code = image_pins.main(["runtime-version", str(_service_dir(Dockerfile=_SERVICE_PY))], stdout=out)
+        code = image_pins.main(["runtime-version", str(_project_dir(Dockerfile=_PROJECT_PY))], stdout=out)
         self.assertEqual((code, out.getvalue()), (0, "0.12.0\n"))
 
     def test_runtime_version_logs_the_reason_and_prints_nothing(self):
-        service = _service_dir(Dockerfile=f"FROM {_RUNTIME}:latest\n")
+        project = _project_dir(Dockerfile=f"FROM {_RUNTIME}:latest\n")
         out = io.StringIO()
         with self.assertLogs("image_pins", "ERROR") as logs:
-            code = image_pins.main(["runtime-version", str(service)], stdout=out)
+            code = image_pins.main(["runtime-version", str(project)], stdout=out)
         self.assertEqual((code, out.getvalue()), (1, ""))
-        self.assertIn(f"{service}/Dockerfile: FROM must name", logs.output[0])
+        self.assertIn(f"{project}/Dockerfile: FROM must name", logs.output[0])
 
-    def test_a_service_without_a_dockerfile_fails(self):
-        service = _service_dir()
+    def test_a_project_without_a_dockerfile_fails(self):
+        project = _project_dir()
         with self.assertLogs("image_pins", "ERROR") as logs:
-            code = image_pins.main(["runtime-version", str(service)], stdout=io.StringIO())
+            code = image_pins.main(["runtime-version", str(project)], stdout=io.StringIO())
         self.assertEqual(code, 1)
-        self.assertIn(f"{service}/Dockerfile: no such file", logs.output[0])
+        self.assertIn(f"{project}/Dockerfile: no such file", logs.output[0])
 
     def test_check_installed_passes_when_the_cli_is_the_image_version(self):
-        service = _service_dir(Dockerfile=_SERVICE_PY)
-        code = image_pins.main(["check-installed", str(service)], stdin=io.StringIO(_UV_TOOL_LIST))
+        project = _project_dir(Dockerfile=_PROJECT_PY)
+        code = image_pins.main(["check-installed", str(project)], stdin=io.StringIO(_UV_TOOL_LIST))
         self.assertEqual(code, 0)
 
     def test_check_installed_fails_naming_both_versions(self):
-        service = _service_dir(Dockerfile=_SERVICE_PY)
+        project = _project_dir(Dockerfile=_PROJECT_PY)
         with self.assertLogs("image_pins", "ERROR") as logs:
             code = image_pins.main(
-                ["check-installed", str(service)], stdin=io.StringIO("continuo-python-runtime v0.11.0\n")
+                ["check-installed", str(project)], stdin=io.StringIO("continuo-python-runtime v0.11.0\n")
             )
         self.assertEqual(code, 1)
         self.assertIn("continuo-python-runtime 0.11.0 is installed but", logs.output[0])
         self.assertIn("names 0.12.0", logs.output[0])
 
     def test_check_installed_fails_when_the_cli_is_missing(self):
-        service = _service_dir(Dockerfile=_SERVICE_PY)
+        project = _project_dir(Dockerfile=_PROJECT_PY)
         with self.assertLogs("image_pins", "ERROR") as logs:
-            code = image_pins.main(["check-installed", str(service)], stdin=io.StringIO("No tools installed\n"))
+            code = image_pins.main(["check-installed", str(project)], stdin=io.StringIO("No tools installed\n"))
         self.assertEqual(code, 1)
         self.assertIn("continuo-python-runtime is not installed", logs.output[0])
 
@@ -152,47 +152,47 @@ class DbtPinsTest(unittest.TestCase):
             image_pins.dbt_pins("FROM python:3.12-slim\nRUN pip install --no-cache-dir pyyaml==6.0.3\n")
 
 
-class CheckDbtServiceTest(unittest.TestCase):
-    def test_a_service_whose_dockerfiles_pin_the_same_versions_passes(self):
-        self.assertEqual(image_pins.check_dbt_service(_service_dir(Dockerfile=_DBT, Dockerfile_local=_DBT)), [])
+class CheckDbtProjectTest(unittest.TestCase):
+    def test_a_project_whose_dockerfiles_pin_the_same_versions_passes(self):
+        self.assertEqual(image_pins.check_dbt_project(_project_dir(Dockerfile=_DBT, Dockerfile_local=_DBT)), [])
 
     def test_reports_each_missing_pin_of_each_dockerfile(self):
-        service = _service_dir(Dockerfile=_DBT_TODAY, Dockerfile_local=_DBT_TODAY)
+        project = _project_dir(Dockerfile=_DBT_TODAY, Dockerfile_local=_DBT_TODAY)
         self.assertEqual(
-            image_pins.check_dbt_service(service),
+            image_pins.check_dbt_project(project),
             [
-                f'{service}/Dockerfile: dbt-adapters is not pinned (add "dbt-adapters==<version>")',
-                f'{service}/Dockerfile: dbt-common is not pinned (add "dbt-common==<version>")',
-                f'{service}/Dockerfile.local: dbt-adapters is not pinned (add "dbt-adapters==<version>")',
-                f'{service}/Dockerfile.local: dbt-common is not pinned (add "dbt-common==<version>")',
+                f'{project}/Dockerfile: dbt-adapters is not pinned (add "dbt-adapters==<version>")',
+                f'{project}/Dockerfile: dbt-common is not pinned (add "dbt-common==<version>")',
+                f'{project}/Dockerfile.local: dbt-adapters is not pinned (add "dbt-adapters==<version>")',
+                f'{project}/Dockerfile.local: dbt-common is not pinned (add "dbt-common==<version>")',
             ],
         )
 
     def test_reports_dockerfiles_that_disagree(self):
         local = _DBT.replace("dbt-adapters==1.24.5", "dbt-adapters==1.24.4")
-        service = _service_dir(Dockerfile=_DBT, Dockerfile_local=local)
+        project = _project_dir(Dockerfile=_DBT, Dockerfile_local=local)
         self.assertEqual(
-            image_pins.check_dbt_service(service),
-            [f"{service}/Dockerfile.local pins dbt-adapters==1.24.4 but {service}/Dockerfile pins dbt-adapters==1.24.5"],
+            image_pins.check_dbt_project(project),
+            [f"{project}/Dockerfile.local pins dbt-adapters==1.24.4 but {project}/Dockerfile pins dbt-adapters==1.24.5"],
         )
 
-    def test_a_service_without_a_dockerfile_fails(self):
-        service = _service_dir(Dockerfile_local=_DBT)
-        self.assertEqual(image_pins.check_dbt_service(service), [f"{service}/Dockerfile: no such file"])
+    def test_a_project_without_a_dockerfile_fails(self):
+        project = _project_dir(Dockerfile_local=_DBT)
+        self.assertEqual(image_pins.check_dbt_project(project), [f"{project}/Dockerfile: no such file"])
 
     def test_check_dbt_logs_the_pins_and_passes(self):
-        service = _service_dir(Dockerfile=_DBT)
+        project = _project_dir(Dockerfile=_DBT)
         with self.assertLogs("image_pins", "INFO") as logs:
-            self.assertEqual(image_pins.main(["check-dbt", str(service)]), 0)
+            self.assertEqual(image_pins.main(["check-dbt", str(project)]), 0)
         self.assertIn(
-            f"{service} pins dbt-core==1.12.0b1 dbt-postgres==1.10.0 dbt-adapters==1.24.5 dbt-common==1.39.0",
+            f"{project} pins dbt-core==1.12.0b1 dbt-postgres==1.10.0 dbt-adapters==1.24.5 dbt-common==1.39.0",
             logs.output[-1],
         )
 
     def test_check_dbt_logs_every_problem_and_fails(self):
-        service = _service_dir(Dockerfile=_DBT_TODAY)
+        project = _project_dir(Dockerfile=_DBT_TODAY)
         with self.assertLogs("image_pins", "ERROR") as logs:
-            self.assertEqual(image_pins.main(["check-dbt", str(service)]), 1)
+            self.assertEqual(image_pins.main(["check-dbt", str(project)]), 1)
         self.assertEqual(len(logs.output), 2)
 
 
@@ -205,7 +205,7 @@ class DbtRequirementsTest(unittest.TestCase):
         text = 'RUN pip install "dbt-common==1.39.0" "dbt-adapters==1.24.5" "dbt-postgres==1.10.0" "dbt-core==1.12.0b1"\n'
         self.assertEqual(image_pins.dbt_requirements(text), _PINS_LIST)
 
-    def test_lists_the_pins_of_the_service_image(self):
+    def test_lists_the_pins_of_the_project_image(self):
         self.assertEqual(image_pins.dbt_requirements(_DBT), _PINS_LIST)
 
     def test_leaves_out_a_package_the_instruction_does_not_install(self):
@@ -226,31 +226,31 @@ class DbtRequirementsTest(unittest.TestCase):
 class DbtRequirementsCommandTest(unittest.TestCase):
     def test_prints_one_requirement_per_line_and_nothing_else(self):
         out = io.StringIO()
-        code = image_pins.main(["dbt-requirements", str(_service_dir(Dockerfile=_DBT))], stdout=out)
+        code = image_pins.main(["dbt-requirements", str(_project_dir(Dockerfile=_DBT))], stdout=out)
         self.assertEqual((code, out.getvalue()), (0, "".join(f"{pin}\n" for pin in _PINS_LIST)))
 
     def test_reads_the_dockerfile_alone_not_the_local_one(self):
         local = _DBT.replace("dbt-adapters==1.24.5", "dbt-adapters==1.24.4")
         out = io.StringIO()
         code = image_pins.main(
-            ["dbt-requirements", str(_service_dir(Dockerfile=_DBT, Dockerfile_local=local))], stdout=out
+            ["dbt-requirements", str(_project_dir(Dockerfile=_DBT, Dockerfile_local=local))], stdout=out
         )
         self.assertEqual((code, out.getvalue()), (0, "".join(f"{pin}\n" for pin in _PINS_LIST)))
 
     def test_a_loose_pin_logs_the_reason_and_prints_nothing(self):
-        service = _service_dir(Dockerfile=_DBT.replace("dbt-common==1.39.0", "dbt-common>=1.39.0"))
+        project = _project_dir(Dockerfile=_DBT.replace("dbt-common==1.39.0", "dbt-common>=1.39.0"))
         out = io.StringIO()
         with self.assertLogs("image_pins", "ERROR") as logs:
-            code = image_pins.main(["dbt-requirements", str(service)], stdout=out)
+            code = image_pins.main(["dbt-requirements", str(project)], stdout=out)
         self.assertEqual((code, out.getvalue()), (1, ""))
         self.assertEqual(
-            logs.output, [f"ERROR:image_pins:{service}/Dockerfile: dbt-common must be pinned with == (got 'dbt-common>=1.39.0')"]
+            logs.output, [f"ERROR:image_pins:{project}/Dockerfile: dbt-common must be pinned with == (got 'dbt-common>=1.39.0')"]
         )
 
-    def test_a_service_without_a_dockerfile_fails_and_prints_nothing(self):
-        service = _service_dir()
+    def test_a_project_without_a_dockerfile_fails_and_prints_nothing(self):
+        project = _project_dir()
         out = io.StringIO()
         with self.assertLogs("image_pins", "ERROR") as logs:
-            code = image_pins.main(["dbt-requirements", str(service)], stdout=out)
+            code = image_pins.main(["dbt-requirements", str(project)], stdout=out)
         self.assertEqual((code, out.getvalue()), (1, ""))
-        self.assertEqual(logs.output, [f"ERROR:image_pins:{service}/Dockerfile: no such file"])
+        self.assertEqual(logs.output, [f"ERROR:image_pins:{project}/Dockerfile: no such file"])

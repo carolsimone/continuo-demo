@@ -1,0 +1,184 @@
+version: 2
+
+models:
+  - name: marketing_spend_monthly
+    description: "Marketing spend rolled up to one row per channel per month. All amounts are EUR."
+    meta: {continuo: {grain: [channel, month]}}
+    columns:
+      - name: channel
+        description: "Channel the spend went to. Referral spend is the per-signup bounty."
+        meta: {continuo: {from: MarketingSpend.channel}}
+        tests:
+          - not_null
+      - name: spend_month
+        description: "First day of the calendar month the spend falls in."
+        meta: {continuo: {period: month, from: MarketingSpend.spend_date}}
+        tests:
+          - not_null
+      - name: spend_eur
+        description: "Total spend for the channel that month, in EUR."
+        meta: {continuo: {from: MarketingSpend.amount, agg: sum}}
+        tests:
+          - not_null
+      - name: campaign_count
+        description: "Number of campaign-level seed rows rolled into this channel-month."
+        meta: {continuo: {from: MarketingSpend, agg: count}}
+        tests:
+          - not_null
+      - name: impressions
+        meta: {continuo: {from: MarketingSpend.impressions, agg: sum}}
+        tests:
+          - not_null
+      - name: clicks
+        meta: {continuo: {from: MarketingSpend.clicks, agg: sum}}
+        tests:
+          - not_null
+
+  - name: marketing_cost_per_user
+    description: "Per-user marketing acquisition cost: each channel-month's spend divided evenly across the users that channel acquired that month. One row per user."
+    meta:
+      continuo:
+        entity: UserMarketingCost
+        readers: [finance]                # finance's ltv_per_user reads it
+    columns:
+      - name: user_id
+        tests:
+          - unique
+          - not_null
+      - name: channel
+        description: "Channel that acquired the user, including unpaid ones (organic)."
+        tests:
+          - not_null
+      - name: campaign
+        meta: {continuo: {property: UserAcquisition.campaign}}
+      - name: acquired_at
+        meta: {continuo: {property: UserAcquisition.acquired_at}}
+        tests:
+          - not_null
+      - name: acquisition_month
+        meta: {continuo: {local: true}}
+        tests:
+          - not_null
+      - name: channel_is_paid
+        description: "True when the channel appears in marketing_spend_monthly."
+        meta: {continuo: {local: true}}
+        tests:
+          - not_null
+      - name: marketing_cost_eur
+        description: "The user's share of their channel's spend in their acquisition month, in EUR."
+        tests:
+          - not_null
+
+  - name: dormant_probe
+    description: "Spend per paid channel: campaign count and total EUR. It has an owner and no tag, so it has no schedule: no cron runs it, and you run it by hand from its node page."
+    meta: {continuo: {grain: [channel]}}
+    columns:
+      - name: channel
+        meta: {continuo: {from: MarketingSpend.channel}}
+      - name: campaign_count
+        meta: {continuo: {from: MarketingSpend, agg: count}}
+      - name: spend_eur
+        meta: {continuo: {from: MarketingSpend.amount, agg: sum}}
+
+  - name: fx_activity_by_channel
+    description: "FX activity of users per acquisition channel per month: active and first-time FX users, transactions, volume and fee revenue in EUR (finance's fx_transactions_eur, read cross-project)."
+    meta: {continuo: {grain: [channel, month]}}
+    columns:
+      - name: channel
+        meta: {continuo: {from: UserAcquisition.channel}}
+        tests:
+          - not_null
+      - name: fx_month
+        meta: {continuo: {period: month, from: Transaction.created_at}}
+        tests:
+          - not_null
+      - name: fx_users
+        meta: {continuo: {local: true}}
+        tests:
+          - not_null
+      - name: first_time_fx_users
+        meta: {continuo: {local: true}}
+      - name: fx_transaction_count
+        meta: {continuo: {from: Transaction, agg: count}}
+      - name: fx_volume_eur
+        meta: {continuo: {from: Transaction.amount_eur, agg: sum}}
+      - name: fx_fee_revenue_eur
+        meta: {continuo: {from: Transaction.fee_amount_eur, agg: sum}}
+
+  - name: channel_spend_summary
+    description: "Lifetime spend per channel: months active, spend, campaign-months, impressions and clicks, click-through rate, cost per click, share of total spend and rank."
+    meta: {continuo: {grain: [channel]}}
+    columns:
+      - name: channel
+        meta: {continuo: {from: MarketingSpend.channel}}
+        tests:
+          - unique
+          - not_null
+      - name: active_months
+        meta: {continuo: {local: true}}
+      - name: first_spend_month
+        meta: {continuo: {local: true}}
+      - name: last_spend_month
+        meta: {continuo: {local: true}}
+      - name: spend_eur
+        meta: {continuo: {from: MarketingSpend.amount, agg: sum}}
+        tests:
+          - not_null
+      - name: campaign_months
+        meta: {continuo: {from: MarketingSpend, agg: count}}
+      - name: impressions
+        meta: {continuo: {from: MarketingSpend.impressions, agg: sum}}
+      - name: clicks
+        meta: {continuo: {from: MarketingSpend.clicks, agg: sum}}
+      - name: click_through_rate
+        meta: {continuo: {local: true}}
+      - name: cost_per_click_eur
+        meta: {continuo: {local: true}}
+      - name: share_of_spend
+        meta: {continuo: {local: true}}
+      - name: spend_rank
+        meta: {continuo: {local: true}}
+
+seeds:
+  - name: seed_marketing_spend
+    description: "Campaign-level marketing spend, one row per campaign per month, 2023-01 to 2024-12. Referral rows are the referral-bounty payout, not ad spend. Generated by scripts/gen_marketing_spend.py — edit that script, not this CSV."
+    meta: {continuo: {entity: MarketingSpend}}
+    columns:
+      - name: spend_id
+        tests:
+          - unique
+          - not_null
+      - name: channel
+        tests:
+          - not_null
+      - name: campaign
+        description: "Campaign the spend row belongs to, for example gad_brand or refer_a_friend."
+      - name: spend_date
+        description: "Timestamp of the spend row; referral rows sit on the first day of the month at midnight."
+      - name: amount
+        tests:
+          - not_null
+      - name: currency
+        description: "Always EUR."
+        meta: {continuo: {local: true}}             # pinned to EUR by the test below
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['EUR']
+      - name: impressions
+        description: "Ad impressions served for the spend row; 0 on referral rows, which are payouts."
+      - name: clicks
+        description: "Ad clicks for the spend row; 0 on referral rows, which are payouts."
+
+  - name: seed_user_acquisition
+    description: "User acquisition seed rows, one row per user: the channel and campaign that acquired the user, and when. Generated by scripts/gen_users.py — edit that script, not this CSV."
+    meta: {continuo: {entity: UserAcquisition}}
+    columns:
+      - name: user_id
+        description: "Id of the acquired user, unique within this seed."
+      - name: channel
+        description: "Channel that acquired the user, including unpaid ones (organic, referral)."
+      - name: campaign
+        description: "Campaign that acquired the user; organic users carry the campaign organic."
+      - name: acquired_at
+        description: "Timestamp when the user was acquired."

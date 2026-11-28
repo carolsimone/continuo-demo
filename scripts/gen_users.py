@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Generate the two user seeds from a single source of truth.
 
-Writes services/core/seeds/seed_users.csv and
-services/marketing/seeds/seed_user_acquisition.csv.
+Writes projects/core/seeds/seed_users.csv and
+projects/marketing/seeds/seed_user_acquisition.csv.
 
 The two files must agree on user_id -> date: finance allocates operational cost
 by core's seed_users.created_at, marketing allocates spend by
@@ -21,8 +21,8 @@ import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-USERS_DST = ROOT / "services" / "core" / "seeds" / "seed_users.csv"
-ACQ_DST = ROOT / "services" / "marketing" / "seeds" / "seed_user_acquisition.csv"
+USERS_DST = ROOT / "projects" / "core" / "seeds" / "seed_users.csv"
+ACQ_DST = ROOT / "projects" / "marketing" / "seeds" / "seed_user_acquisition.csv"
 
 # A non-empty SEED_SALT draws a different dataset from the same rules: the
 # agent-remediation eval grades a fix on data the fix never ran on. Unset, the

@@ -1,0 +1,21 @@
+name: project_1
+version: '1.0.2'
+config-version: 2
+profile: default
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+
+seeds:
+  project_1:
+    +full_refresh: false
+    +meta:
+      owner: "test"
+      criticality: "CORE"
+
+models:
+  project_1:
+    +materialized: table
+    +meta:
+      owner: "test"
+      criticality: "CORE"
