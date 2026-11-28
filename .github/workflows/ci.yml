@@ -164,7 +164,7 @@ jobs:
   # the release's own contract checks that needs no running continuo. It parses
   # the project and reports what the release would reject, such as a seed whose
   # declared columns differ from its CSV header, two nodes that share a contract
-  # id, or a node whose project is not the one the project deploys under. A
+  # id, or a node whose project is not the one the release names. A
   # passing check does not guarantee the release: the release has more stages.
   # dbt runs from a Python 3.12 virtualenv built from the project image's own
   # pins (the library needs Python 3.14, so it is a separate tool) and the check
@@ -280,8 +280,9 @@ jobs:
 
   # The scripts CI and CD run, the wiring of the workflows and the words of the
   # repository are tested on every change to them: release.sh against a stub of
-  # continuo's release API, the image pins, the text of both workflows, and every
-  # tracked file and path against the names continuo's glossary retired.
+  # continuo's release API, the image pins, the text of both workflows, the seed
+  # generators, and every tracked file and path against the names continuo's
+  # glossary retired.
   scripts:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -298,4 +299,4 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Test the scripts
-        run: uvx pytest==9.1.1 scripts/tests/test_release_sh.py scripts/tests/test_image_pins.py scripts/tests/test_workflows.py scripts/tests/test_glossary_words.py -v
+        run: uvx pytest==9.1.1 scripts/tests -v

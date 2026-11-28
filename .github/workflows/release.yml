@@ -81,6 +81,12 @@ jobs:
 
       - name: Compute release identifiers + changed project
         id: ids
+        # The dispatch inputs reach the script as env values, never as text pasted
+        # into it, so an input can never run as shell.
+        env:
+          INPUT_PROJECT: ${{ inputs.project }}
+          FORCE_BOOTSTRAP: ${{ inputs.force_bootstrap == true }}
+          REBASELINE: ${{ inputs.rebaseline == true }}
         run: |
           SHA="$(git rev-parse --short HEAD)"
 
@@ -88,7 +94,12 @@ jobs:
           # required for a forced bootstrap, where no project directory has
           # changed. A push release derives the project from the diff below.
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            PROJECT="${{ inputs.project }}"
+            PROJECT="${INPUT_PROJECT}"
+            # One folder name under projects/: no path, nothing hidden, no whitespace.
+            if ! [[ $PROJECT =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+              # The value is not echoed: a newline in it would start a workflow command.
+              echo "::error::the project input is not a project name: letters, digits, '.', '_' and '-', starting with a letter or digit"; exit 1
+            fi
             # The ontology is not a projects/<project>/ folder. A dispatch for it releases
             # ontology/ontology.yaml at this commit through release-ontology, and no project.
             if [ "${PROJECT}" = "ontology" ]; then
@@ -108,7 +119,7 @@ jobs:
             # A project has the kind python when its contracts/ holds *.odcs.yaml files;
             # every other project is a dbt project.
             if compgen -G "projects/${PROJECT}/contracts/*.odcs.yaml" > /dev/null; then KIND="python"; else KIND="dbt"; fi
-            echo "Dispatched release: ${PROJECT} @ ${SHA} (kind=${KIND}, force_bootstrap=${{ inputs.force_bootstrap }}, rebaseline=${{ inputs.rebaseline }})"
+            echo "Dispatched release: ${PROJECT} @ ${SHA} (kind=${KIND}, force_bootstrap=${FORCE_BOOTSTRAP}, rebaseline=${REBASELINE})"
             echo "skip=false" >> "$GITHUB_OUTPUT"
             echo "skip_release=false" >> "$GITHUB_OUTPUT"
             echo "tag=${SHA}" >> "$GITHUB_OUTPUT"
@@ -325,8 +336,8 @@ jobs:
 
       # --image is the full ref composed above, so this runs after the image
       # is pushed. --repo-root is the PROJECT's own directory, not the monorepo
-      # root: each python project is a self-contained project the same way
-      # a dbt project is, and repo-root is what the in-repo import closure
+      # root: each Python project stands on its own in its folder, the same way
+      # a dbt project does, and repo-root is what the in-repo import closure
       # (folded into shared_code_hash) resolves against.
       - name: Pack the ODCS bundle
         if: needs.detect.outputs.kind == 'python' && needs.detect.outputs.skip_release != 'true'

@@ -74,11 +74,8 @@ class CiChecksTest(unittest.TestCase):
         )
 
     def test_ci_runs_every_scripts_test(self):
-        self.assertIn(
-            "uvx pytest==9.1.1 scripts/tests/test_release_sh.py scripts/tests/test_image_pins.py "
-            "scripts/tests/test_workflows.py scripts/tests/test_glossary_words.py",
-            _CI,
-        )
+        # The whole folder, so a new test file runs without a change to the workflow.
+        self.assertIn("        run: uvx pytest==9.1.1 scripts/tests -v\n", _CI)
 
     def test_ci_runs_on_every_file_the_glossary_check_reads(self):
         # The glossary check reads every tracked file, so a change to the README or to any
@@ -509,18 +506,28 @@ _RELEASE_JOB = "release"
 _ONTOLOGY_JOB = "release-ontology"
 
 
-def _detect_script(event_name, before, project):
-    """The shell of the detect step, with the GitHub expressions it holds replaced by their values."""
+def _detect_script(event_name, before):
+    """The shell of the detect step, with the GitHub expressions it holds replaced by their values.
+
+    The dispatch inputs reach the shell only through the step's env (see _detect_env).
+    """
     job = _job_text(_RELEASE, _DETECT)
-    body = job.split("        id: ids\n        run: |\n", 1)[1]
-    values = {
-        "github.event_name": event_name,
-        "github.event.before": before,
-        "inputs.project": project,
-        "inputs.force_bootstrap": "false",
-        "inputs.rebaseline": "false",
-    }
+    body = job.split("        id: ids\n", 1)[1].split("        run: |\n", 1)[1]
+    values = {"github.event_name": event_name, "github.event.before": before}
     return re.sub(r"\$\{\{(.*?)\}\}", lambda match: values[match.group(1).strip()], textwrap.dedent(body))
+
+
+def _detect_env(project):
+    """The env the detect step sets, with the dispatch inputs it reads given their values."""
+    job = _job_text(_RELEASE, _DETECT)
+    block = job.split("        id: ids\n", 1)[1].split("        run: |\n", 1)[0]
+    env = dict(re.findall(r"(?m)^          ([A-Z_]+): (.+)$", block))
+    values = {
+        "${{ inputs.project }}": project,
+        "${{ inputs.force_bootstrap == true }}": "false",
+        "${{ inputs.rebaseline == true }}": "false",
+    }
+    return {name: values[expression] for name, expression in env.items()}
 
 
 def _commit_range(tmp, changed):
@@ -583,8 +590,8 @@ def _run_detect(changed, event_name="push", project=""):
     """
     with tempfile.TemporaryDirectory() as tmp:
         repo, env, before, git = _commit_range(tmp, changed)
-        script = _detect_script(event_name, before, project)
-        status, outputs, text = _run_step(tmp, repo, env, script, {"GITHUB_RUN_NUMBER": "12"})
+        script = _detect_script(event_name, before)
+        status, outputs, text = _run_step(tmp, repo, env, script, {"GITHUB_RUN_NUMBER": "12", **_detect_env(project)})
         return status, outputs, text, git("rev-parse", "--short", "HEAD")
 
 
@@ -702,6 +709,29 @@ class OntologyReleaseTest(unittest.TestCase):
         status, _, stderr, _ = _run_detect(changed)
         self.assertEqual(status, 1)
         self.assertIn("exactly one changed project per release; found 2", stderr)
+
+    def test_a_dispatch_input_is_never_run_as_shell(self):
+        # The input reaches the script as an env value, never as text pasted into it.
+        for project in ('a"; echo INJECTED; "', "$(echo INJECTED)", "a`echo INJECTED`"):
+            with self.subTest(project=project):
+                status, outputs, text, _ = _run_detect([], event_name="workflow_dispatch", project=project)
+                self.assertEqual(status, 1)
+                self.assertNotIn("INJECTED\n", text.replace("echo INJECTED", ""))
+                self.assertNotIn("project", outputs)
+
+    def test_a_dispatch_refuses_a_name_that_is_not_one_projects_folder(self):
+        for project in ("", "../ontology", "a/b", ".hidden", "core "):
+            with self.subTest(project=project):
+                status, outputs, text, _ = _run_detect([], event_name="workflow_dispatch", project=project)
+                self.assertEqual(status, 1)
+                self.assertIn("is not a project name", text)
+                self.assertNotIn("project", outputs)
+
+    def test_no_run_script_pastes_a_dispatch_input(self):
+        for name, text in (("release.yml", _RELEASE), ("ci.yml", _CI)):
+            with self.subTest(workflow=name):
+                for script in re.findall(r"(?ms)^        run: \|\n(.*?)(?=^      - |^  \S|\Z)", text):
+                    self.assertNotIn("${{ inputs.", script)
 
     def test_a_dispatch_for_the_ontology_releases_only_the_ontology(self):
         status, outputs, stderr, sha = _run_detect([], event_name="workflow_dispatch", project="ontology")

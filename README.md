@@ -114,10 +114,10 @@ An operator token may also bootstrap a project (`FORCE_BOOTSTRAP=true`, or autom
 ```bash
 shellcheck scripts/release.sh
 
-# The tests of release.sh (against a stub of continuo's release API, needs curl
-# and jq), of the image pins, of the workflows and of the glossary words this repository uses:
-uvx pytest==9.1.1 scripts/tests/test_release_sh.py scripts/tests/test_image_pins.py scripts/tests/test_workflows.py \
-  scripts/tests/test_glossary_words.py
+# Every script test, as the scripts job of ci.yml runs them: release.sh against a stub of
+# continuo's release API (needs curl and jq), the image pins, the workflows, the glossary words
+# this repository uses and the seed generators:
+uvx pytest==9.1.1 scripts/tests
 
 # A dbt project: check that its Dockerfile pins every dbt package.
 python3 scripts/image_pins.py check-dbt projects/core
