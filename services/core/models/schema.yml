@@ -129,23 +129,6 @@ models:
       - name: share_of_month_volume
         meta: {continuo: {local: true}}
 
-  - name: user_engagement_monthly
-    description: "App sessions and active days per user per month, beside the month's transactions (product's app_events)."
-    meta: {continuo: {grain: [user, month]}}
-    columns:
-      - name: user_id
-        meta: {continuo: {from: Transaction.user_id}}
-      - name: activity_month
-        meta: {continuo: {period: month, from: Transaction.created_at}}
-      - name: sessions
-        meta: {continuo: {local: true}}
-      - name: active_days
-        meta: {continuo: {local: true}}
-      - name: transaction_count
-        meta: {continuo: {from: Transaction, agg: count}}
-      - name: transactions_per_session
-        meta: {continuo: {local: true}}
-
   - name: read_order
     meta: {continuo: {entity: Order}}       # copy of service-py's demo_orders_csv
     columns:
