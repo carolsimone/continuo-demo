@@ -163,7 +163,9 @@ jobs:
           # is not a projects/<project>/ folder, so it never counts toward the one
           # changed project above, and a push that changes a project and the
           # ontology is one release of each, the project first. These outputs are
-          # written only after the refusal above, so a refused push exposes none.
+          # written after the refusal of two changed projects; a push that the checks
+          # of the one changed project refuse further down has them written, and the
+          # release-ontology job, which requires detect to succeed, still releases nothing.
           if [ -n "$(git diff --name-only "$BEFORE" HEAD -- ontology/ontology.yaml)" ]; then
             ONTOLOGY_CHANGED=true
           else
@@ -196,6 +198,11 @@ jobs:
           # project to build.
           if [ ! -d "projects/${PROJECT}" ]; then
             echo "::error::projects/${PROJECT} is not a project folder at this commit"; exit 1
+          fi
+          # ontology is the project of ontology/ontology.yaml, kind ontology, so a folder of
+          # that name would be released as a second project of that name.
+          if [ "${PROJECT}" = "ontology" ]; then
+            echo "::error::projects/ontology cannot be a project: ontology is the project of ontology/ontology.yaml"; exit 1
           fi
           # A project has the kind python when its contracts/ holds *.odcs.yaml files;
           # every other project is a dbt project.

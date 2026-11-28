@@ -727,6 +727,20 @@ class OntologyReleaseTest(unittest.TestCase):
         self.assertIn("projects/readme.md is not a project folder at this commit", text)
         self.assertNotIn("project", outputs)
 
+    def test_a_push_refuses_a_projects_folder_named_ontology(self):
+        # ontology is the project of ontology/ontology.yaml, kind ontology: a folder of that
+        # name would be a second project of that name.
+        status, outputs, text, _ = _run_detect(["projects/ontology/m.sql"])
+        self.assertEqual(status, 1)
+        self.assertIn("projects/ontology cannot be a project", text)
+        self.assertNotIn("project", outputs)
+
+    def test_ci_refuses_a_projects_folder_named_ontology(self):
+        status, outputs, text = _run_single_project(["projects/ontology/m.sql"])
+        self.assertEqual(status, 1)
+        self.assertIn("projects/ontology cannot be a project", text)
+        self.assertNotIn("project", outputs)
+
     def test_ci_refuses_a_changed_path_that_is_not_a_project_folder(self):
         step = _job_text(_CI, "check-single-project")
         self.assertIn('            if [ ! -d "projects/${PROJECT}" ]; then\n', step)

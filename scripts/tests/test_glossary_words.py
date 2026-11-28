@@ -47,8 +47,9 @@ def _tracked_files():
 
 
 def _findings(path, text):
+    # Allowed text is removed only as a whole word, so `card-services` is still found.
     for allowed in _ALLOWED:
-        text = text.replace(allowed, "")
+        text = re.sub(r"(?<![A-Za-z0-9])" + re.escape(allowed) + r"(?![A-Za-z0-9])", "", text)
     found = []
     for line_number, line in enumerate(text.splitlines(), start=1):
         for pattern, use in _RETIRED:
@@ -81,7 +82,8 @@ class GlossaryWordsTest(unittest.TestCase):
     def test_the_check_finds_a_retired_name_in_each_form(self):
         for text in ("services/core", "SERVICE_NAME", "--service x", "service-py", "a python-odcs project",
                      "GET /api/v1/current-prod", "current_prod_release_id", "blue/green", "<svc>",
-                     "serviceName", "myService", "currentProd", "python_odcs", "pythonOdcs"):
+                     "serviceName", "myService", "currentProd", "python_odcs", "pythonOdcs",
+                     "card-services", "port-forward svc/uix services"):
             with self.subTest(text=text):
                 self.assertNotEqual(_findings("x", text), [])
 

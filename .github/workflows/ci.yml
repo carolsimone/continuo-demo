@@ -76,6 +76,11 @@ jobs:
             if [ ! -d "projects/${PROJECT}" ]; then
               echo "::error::projects/${PROJECT} is not a project folder in this pull request"; exit 1
             fi
+            # ontology is the project of ontology/ontology.yaml, kind ontology, as release.yml
+            # refuses it.
+            if [ "${PROJECT}" = "ontology" ]; then
+              echo "::error::projects/ontology cannot be a project: ontology is the project of ontology/ontology.yaml"; exit 1
+            fi
             # A project has the kind python when its contracts/ holds *.odcs.yaml
             # files; every other project is a dbt project. This mirrors
             # release.yml's own detect job so a PR is checked the same way its
