@@ -14,8 +14,12 @@ Run from repo root:  uv run python scripts/gen_marketing_spend.py
 """
 import csv
 import hashlib
+import logging
 import os
+import sys
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parents[1]
 DST = ROOT / "projects" / "marketing" / "seeds" / "seed_marketing_spend.csv"
@@ -154,8 +158,9 @@ def main():
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         w.writeheader()
         w.writerows(rows)
-    print(f"Wrote {len(rows)} rows to {DST.relative_to(ROOT)}")
+    log.info("Wrote %s rows to %s", len(rows), DST.relative_to(ROOT))
 
 
 if __name__ == "__main__":
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(message)s")
     main()

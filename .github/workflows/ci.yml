@@ -68,6 +68,12 @@ jobs:
 
           if [ "$COUNT" -eq 1 ]; then
             PROJECT="$(printf '%s' "$CHANGED" | cut -d/ -f2)"
+            # The later jobs paste the project into their scripts, so a folder name
+            # that is not a plain project name is refused here, as release.yml refuses it.
+            if ! [[ $PROJECT =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+              # The value is not echoed: a newline in it would start a workflow command.
+              echo "::error::the changed folder under projects/ is not a project name: letters, digits, '.', '_' and '-', starting with a letter or digit"; exit 1
+            fi
             # A project has the kind python when its contracts/ holds *.odcs.yaml
             # files; every other project is a dbt project. This mirrors
             # release.yml's own detect job so a PR is checked the same way its

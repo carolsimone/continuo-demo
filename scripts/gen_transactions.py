@@ -27,9 +27,13 @@ Run from repo root (AFTER gen_users.py):
 import csv
 import hashlib
 import importlib.util
+import logging
 import os
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parents[1]
 ACQ_SRC = ROOT / "projects" / "marketing" / "seeds" / "seed_user_acquisition.csv"
@@ -207,9 +211,10 @@ def main() -> None:
                                           "created_at", "fee_amount"])
         w.writeheader()
         w.writerows(fx)
-    print(f"wrote {len(card)} rows to {CARD_DST}")
-    print(f"wrote {len(fx)} rows to {FX_DST}")
+    log.info("wrote %s rows to %s", len(card), CARD_DST)
+    log.info("wrote %s rows to %s", len(fx), FX_DST)
 
 
 if __name__ == "__main__":
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(message)s")
     main()

@@ -184,6 +184,12 @@ jobs:
 
           # Exactly one project changed → normal single-project release.
           PROJECT="$(printf '%s' "$CHANGED" | cut -d/ -f2)"
+          # The later steps paste the project into their scripts, so a folder name
+          # that is not a plain project name is refused here, as a dispatch input is.
+          if ! [[ $PROJECT =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            # The value is not echoed: a newline in it would start a workflow command.
+            echo "::error::the changed folder under projects/ is not a project name: letters, digits, '.', '_' and '-', starting with a letter or digit"; exit 1
+          fi
           # A project has the kind python when its contracts/ holds *.odcs.yaml files;
           # every other project is a dbt project.
           if compgen -G "projects/${PROJECT}/contracts/*.odcs.yaml" > /dev/null; then KIND="python"; else KIND="dbt"; fi

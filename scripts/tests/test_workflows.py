@@ -727,6 +727,22 @@ class OntologyReleaseTest(unittest.TestCase):
                 self.assertIn("is not a project name", text)
                 self.assertNotIn("project", outputs)
 
+    def test_a_push_refuses_a_changed_folder_that_is_not_a_project_name(self):
+        # The later steps paste the project into their scripts, so a folder name a push brings
+        # is held to the rule a dispatch input is.
+        for folder in ("$(echo INJECTED)", "a b", ".hidden"):
+            with self.subTest(folder=folder):
+                status, outputs, text, _ = _run_detect([f"projects/{folder}/m.sql"])
+                self.assertEqual(status, 1)
+                self.assertIn("is not a project name", text)
+                self.assertNotIn("INJECTED\n", text.replace("echo INJECTED", ""))
+                self.assertNotIn("project", outputs)
+
+    def test_ci_refuses_a_changed_folder_that_is_not_a_project_name(self):
+        step = _job_text(_CI, "check-single-project")
+        self.assertIn("            if ! [[ $PROJECT =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then\n", step)
+        self.assertLess(step.index("if ! [[ $PROJECT =~"), step.index('echo "project=${PROJECT}"'))
+
     def test_no_run_script_pastes_a_dispatch_input(self):
         for name, text in (("release.yml", _RELEASE), ("ci.yml", _CI)):
             with self.subTest(workflow=name):
