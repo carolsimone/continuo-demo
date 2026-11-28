@@ -269,10 +269,13 @@ jobs:
         run: continuo-runtime lint "projects/${{ needs.detect.outputs.project }}/scripts"
 
       # --dialect postgres checks each declared read against the install's own
-      # warehouse dialect, not just sqlglot's dialect-neutral grammar.
+      # warehouse dialect, not just sqlglot's dialect-neutral grammar. --project
+      # refuses a contract that names another project, and --ontology checks the
+      # bindings against the ontology of this checkout, as ci.yml's python-checks
+      # does, so a dispatched release meets the pull request's check.
       - name: Validate python contracts
         if: needs.detect.outputs.kind == 'python' && needs.detect.outputs.skip_release != 'true'
-        run: continuo-runtime validate "projects/${{ needs.detect.outputs.project }}/contracts" --dialect postgres
+        run: continuo-runtime validate "projects/${{ needs.detect.outputs.project }}/contracts" --dialect postgres --project "${{ needs.detect.outputs.project }}" --ontology ontology/ontology.yaml
 
       # Registers the QEMU binfmt handlers that let this amd64 runner execute
       # arm64 binaries, which is what the linux/arm64 half of the image build

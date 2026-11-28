@@ -89,6 +89,23 @@ class CiChecksTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertIn(f"\n      - {path}\n", paths)
 
+    def test_every_file_the_glossary_check_reads_starts_ci(self):
+        # A tracked file that no `paths` entry of ci.yml names never starts CI, so a pull
+        # request that changes only that file could bring back a retired name unchecked.
+        filters = re.findall(r"(?m)^      - '([^']+)'$", _CI.split("\njobs:\n", 1)[0])
+        listed = subprocess.run(
+            ["git", "ls-files", "-z"], cwd=_ROOT, check=True, capture_output=True, text=True
+        ).stdout
+        for path in (p for p in listed.split("\0") if p):
+            # The glossary check skips seed data and the licence text.
+            if path.endswith(".csv") or path == "LICENSE":
+                continue
+            with self.subTest(path=path):
+                self.assertTrue(
+                    any(path == f or (f.endswith("/**") and path.startswith(f[:-2])) for f in filters),
+                    f"{path} is read by the glossary check, but no paths entry of ci.yml starts CI for it",
+                )
+
 
 def _step(text, name):
     """The text of the step called `name`: its `- name:` line to the end of its last line.
@@ -165,7 +182,7 @@ class PythonKindTest(unittest.TestCase):
                 self.assertNotIn('elif [ -d "projects/${PROJECT}/contracts" ]', text)
                 self.assertNotRegex(text, r'(?m)^\s*if \[ -d "projects/\$\{PROJECT\}/contracts" \]')
 
-    def test_no_workflow_names_the_kind_python_odcs(self):
+    def test_no_workflow_names_the_retired_python_kind(self):
         for name, text in (("release.yml", _RELEASE), ("ci.yml", _CI)):
             with self.subTest(workflow=name):
                 self.assertNotIn("python" + "-odcs", text)
@@ -466,6 +483,17 @@ class OntologyCheckTest(unittest.TestCase):
         self.assertIn(
             '        run: continuo-runtime validate "projects/${{ needs.check-single-project.outputs.project }}/contracts" '
             '--dialect postgres --project "${{ needs.check-single-project.outputs.project }}" '
+            "--ontology ontology/ontology.yaml\n",
+            step,
+        )
+
+    def test_the_release_validates_the_contracts_as_the_pull_request_does(self):
+        # The release checks the project property and the ontology bindings before it builds the
+        # image, so a dispatched release, which no pull request checked, meets the same check.
+        step = _step(_RELEASE, "Validate python contracts")
+        self.assertIn(
+            '        run: continuo-runtime validate "projects/${{ needs.detect.outputs.project }}/contracts" '
+            '--dialect postgres --project "${{ needs.detect.outputs.project }}" '
             "--ontology ontology/ontology.yaml\n",
             step,
         )

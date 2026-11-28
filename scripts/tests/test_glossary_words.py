@@ -15,15 +15,16 @@ import unittest
 _ROOT = pathlib.Path(__file__).resolve().parents[2]
 _THIS = pathlib.Path(__file__).resolve().relative_to(_ROOT).as_posix()
 
-# A name counts as a word when no letter or digit touches it, so `services/`, `SERVICE_NAME`,
-# `--service` and `service-1` are found while `serviceable` is not.
-_EDGE_BEFORE = r"(?<![A-Za-z0-9])"
-_EDGE_AFTER = r"(?![A-Za-z0-9])"
+# A name counts as a word when no letter or digit touches it, or when a camelCase word boundary
+# does, so `services/`, `SERVICE_NAME`, `--service`, `service-1`, `serviceName` and `myService`
+# are found while `serviceable` is not. The camelCase halves are case-sensitive.
+_EDGE_BEFORE = r"(?:(?<![A-Za-z0-9])|(?-i:(?<=[a-z0-9])(?=[A-Z])))"
+_EDGE_AFTER = r"(?:(?![A-Za-z0-9])|(?-i:(?<=[a-z0-9])(?=[A-Z])))"
 
 # Each retired name, matched whatever its case, and the glossary word that replaces it.
 _RETIRED = (
     (r"services?|svc", "project"),
-    (r"python-odcs", "the kind python"),
+    (r"python[-_]?odcs", "the kind python"),
     (r"current[-_ ]?prod", "live release or production pointer"),
     (r"blue/green", "candidate release"),
     (r"release pipeline|verification run|pipeline run", "release check"),
@@ -79,12 +80,14 @@ class GlossaryWordsTest(unittest.TestCase):
 
     def test_the_check_finds_a_retired_name_in_each_form(self):
         for text in ("services/core", "SERVICE_NAME", "--service x", "service-py", "a python-odcs project",
-                     "GET /api/v1/current-prod", "current_prod_release_id", "blue/green", "<svc>"):
+                     "GET /api/v1/current-prod", "current_prod_release_id", "blue/green", "<svc>",
+                     "serviceName", "myService", "currentProd", "python_odcs", "pythonOdcs"):
             with self.subTest(text=text):
                 self.assertNotEqual(_findings("x", text), [])
 
     def test_the_check_leaves_other_words_and_the_allowed_text_alone(self):
-        for text in ("projects/core", "serviceable", "kubectl port-forward svc/ui 8090:8090",
+        for text in ("projects/core", "serviceable", "Serviceable", "observices", "production",
+                     "kubectl port-forward svc/ui 8090:8090",
                      "written by card-service", "purpose: service_operation}", "a CD pipeline",
                      "env_var('POSTGRES_USER', 'continuo_svc')"):
             with self.subTest(text=text):
