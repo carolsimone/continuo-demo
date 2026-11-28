@@ -1,0 +1,27 @@
+FROM python:3.12-slim
+
+# Pin dbt to the classic postgres-supporting line. An unpinned dbt-postgres
+# resolves to dbt Fusion, which dropped the postgres adapter. dbt-adapters and
+# dbt-common are pinned too: they hold the macros dbt itself runs (the
+# materializations, the seed loader, the generic tests), which continuo's
+# content hash leaves out, so a rebuild must not pick up new ones unseen.
+# These are the versions continuo's own dbt base image pins and its e2e suite
+# runs. No boto3 / validator: validation is image-free (continuo-owned image);
+# this image only runs the team's dbt project for compile / seed-build /
+# scheduled runs.
+RUN pip install --no-cache-dir "dbt-core==1.12.0b1" "dbt-postgres==1.10.0" "dbt-adapters==1.24.5" "dbt-common==1.39.0"
+
+WORKDIR /project
+
+# The dbt project itself. macros/ carries generate_schema_name, which
+# routes a run to the candidate schema when continuo sets DBT_TARGET_SCHEMA
+# (used by the candidate seed-build leg) and falls back to the default schema
+# otherwise (prod runs).
+COPY dbt_project.yml profiles.yml ./
+COPY macros/ ./macros/
+COPY models/ ./models/
+
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]

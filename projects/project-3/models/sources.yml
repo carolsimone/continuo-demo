@@ -1,0 +1,14 @@
+version: 2
+
+sources:
+  - name: project_1
+    schema: analytics
+    tables:
+      - name: table_a
+      - name: table_b
+      - name: table_c
+  - name: project_2
+    schema: analytics
+    tables:
+      - name: table_g
+      - name: table_h

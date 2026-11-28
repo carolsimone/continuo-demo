@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Local functional smoke for the finance operational-cost and LTV models.
 # Builds the finance image, stands up an ephemeral postgres, stubs the
-# cross-service upstreams (analytics.seed_fx_transactions with one synthetic
+# cross-project upstreams (analytics.seed_fx_transactions with one synthetic
 # row; analytics.seed_users from the real core CSV; analytics.revenue_per_user
 # and analytics.marketing_cost_per_user from the real seed_users with flat
 # stand-in per-user values -- core's/marketing's own smokes cover the real
@@ -23,7 +23,7 @@ trap cleanup EXIT
 cleanup
 
 echo "== build finance image (real Dockerfile) =="
-docker build -t "$IMG" -f "$ROOT/services/finance/Dockerfile" "$ROOT/services/finance"
+docker build -t "$IMG" -f "$ROOT/projects/finance/Dockerfile" "$ROOT/projects/finance"
 
 echo "== start ephemeral postgres =="
 docker network create "$NET" >/dev/null
@@ -37,7 +37,7 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 
-echo "== create analytics schema + cross-service upstream stubs =="
+echo "== create analytics schema + cross-project upstream stubs =="
 docker exec -i "$PG" psql -U continuo_svc -d continuo_dbt <<'SQL'
 CREATE SCHEMA IF NOT EXISTS analytics;
 DROP TABLE IF EXISTS analytics.seed_fx_transactions;
@@ -77,7 +77,7 @@ SQL
 echo "== load real core seed_users (2000 users, 2023-01..2024-12) =="
 docker exec -i "$PG" psql -U continuo_svc -d continuo_dbt \
   -c "COPY analytics.seed_users FROM STDIN WITH (FORMAT csv, HEADER true)" \
-  < "$ROOT/services/core/seeds/seed_users.csv"
+  < "$ROOT/projects/core/seeds/seed_users.csv"
 
 echo "== stub revenue_per_user and marketing_cost_per_user from the real seeds =="
 docker exec -i "$PG" psql -U continuo_svc -d continuo_dbt <<'SQL'

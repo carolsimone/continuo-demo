@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 #
-# release.sh — drive a continuo blue/green release from CD.
+# release.sh — drive a continuo release from CD: submit it, then follow the candidate
+# release to its promotion or rejection.
 #
-# For a service, the calling workflow only builds and pushes the image. dbt compile
+# For a project, the calling workflow only builds and pushes the image. dbt compile
 # and manifest upload happen inside continuo. This script talks to continuo's public
 # release API (`/api/v1` on the ui, reached at CONTINUO_URL) over HTTPS with a
 # bearer token, and:
-#   1. reads GET /api/v1/current-prod — if current_prod is unseeded, this run is
-#      a bootstrap (promote without validation);
+#   1. reads GET /api/v1/live-release — if production has no live release yet,
+#      this run is a bootstrap (promote without validation);
 #   2. POSTs the release to /api/v1/releases (continuo replies 202 Accepted
 #      immediately);
 #   3. polls GET /api/v1/releases/<id> to a terminal status, failing on
@@ -16,18 +17,18 @@
 # The API is documented in continuo's deploy/README.md, section "Releasing from
 # CI (GitHub Actions)".
 #
-# continuo models a release as a SINGLE changed service: POST /releases takes
-# one {service, image_tag} and continuo reconstructs the full manifest set from
-# the live service_prod pointers. continuo runs dbt compile internally to
+# continuo models a release as a SINGLE changed project: POST /releases takes
+# one {project, image_tag} and continuo reconstructs the full manifest set from
+# the production pointers. continuo runs dbt compile internally to
 # produce the manifest; the caller never touches S3 for a dbt release. The
-# canonical key <service>/<release_id>/manifest.json is derived by continuo — so
+# canonical key <project>/<release_id>/manifest.json is derived by continuo — so
 # it is not sent in the body.
 #
-# The same script releases the ontology file, ontology/ontology.yaml, as the service
+# The same script releases the ontology file, ontology/ontology.yaml, as the project
 # "ontology" with KIND=ontology. There is no image: the workflow uploads the file to
 # s3://continuo-dev/ontology/<release_id>/ontology.yaml first, as it uploads a
-# python-odcs bundle before its release, and IMAGE_TAG is the short sha of the commit.
-# A push that changes a service and the ontology releases the service first.
+# Python project's ODCS bundle before its release, and IMAGE_TAG is the short sha of the commit.
+# A push that changes a project and the ontology releases the project first.
 #
 # Authentication. Every call carries `Authorization: Bearer <token>`:
 #   - CONTINUO_TOKEN set: that token is used as is. This is an operator's own
@@ -37,13 +38,13 @@
 #     afresh for each API call (these tokens expire within minutes), with the
 #     origin of CONTINUO_URL as its audience. The job must grant
 #     `permissions: id-token: write`, and the repository must be bound to the
-#     service in continuo's `ciAuth.bindings`.
+#     project in continuo's `ciAuth.bindings`.
 # The token is never printed.
 #
 # A CI token carries the repository and commit, so REPO and COMMIT_SHA must be
 # equal to the token's or be left unset. An operator token must send both. A CI
 # bootstrap is refused (403 bootstrap_not_allowed) unless the repository's
-# binding sets `allowBootstrap: true`; bootstrapping a service is an operator
+# binding sets `allowBootstrap: true`; bootstrapping a project is an operator
 # action.
 #
 # Required environment:
@@ -52,10 +53,10 @@
 #   RELEASE_ID       — unique per run, e.g. rel-<shortsha>-<runid>; letters,
 #                      digits, '.', '_' and '-', starting with a letter or digit,
 #                      at most 128 characters
-#   SERVICE          — the single changed service, e.g. service-3
-#   IMAGE_TAG        — that service's image tag: a dbt release passes the bare
+#   PROJECT          — the single changed project, e.g. project-3
+#   IMAGE_TAG        — that project's image tag: a dbt release passes the bare
 #                      short sha (continuo composes the pull ref itself); a
-#                      python release (KIND=python-odcs) passes the full
+#                      Python release (KIND=python) passes the full
 #                      pullable registry ref, since continuo runs that verbatim.
 #                      The ontology has no image: its release passes the short
 #                      sha of the commit.
@@ -63,23 +64,22 @@
 # Optional:
 #   CONTINUO_TOKEN   — bearer token to use instead of the GitHub Actions OIDC
 #                      token (see Authentication).
-#   KIND             — the service kind: "dbt", "python-odcs" or "ontology".
-#                      "python-odcs" marks a python-node service whose contracts
-#                      are ODCS files, and "ontology" the one service that holds
+#   KIND             — the project kind: "dbt", "python" or "ontology".
+#                      "python" marks a Python project, whose data contracts
+#                      are ODCS files, and "ontology" the one project that holds
 #                      the company's ontology file (ontology/ontology.yaml); each
 #                      adds "kind":"<value>" to the POST body. "dbt", or leaving
-#                      it unset, sends no "kind" field at all. Any other value,
-#                      "python" included, is refused before the first request,
-#                      with exit status 2.
+#                      it unset, sends no "kind" field at all. Any other value
+#                      is refused before the first request, with exit status 2.
 #   REPO             — "<owner>/<repo>" sent as "repo" (see Authentication).
 #   COMMIT_SHA       — full commit sha sent as "commit_sha".
 #   FORCE_BOOTSTRAP  — "true" to promote without validation regardless of
-#                      current_prod state. After continuo changes its hash
+#                      whether production has a live release. After continuo changes its hash
 #                      formula use REBASELINE instead: a bootstrap alone leaves
 #                      every seed whose hash moved to be reloaded. Default:
-#                      bootstrap only when prod is unseeded.
+#                      bootstrap only when production has no live release.
 #   REBASELINE       — "true" sends "rebaseline": true together with
-#                      "bootstrap": true, the one release per service that
+#                      "bootstrap": true, the one release per project that
 #                      continuo's upgrade notes ask for after a hash formula
 #                      change. continuo promotes it without validation and
 #                      records every seed at its new hash, so no seed reloads.
@@ -114,14 +114,14 @@ set -euo pipefail
 
 : "${CONTINUO_URL:?CONTINUO_URL must be set}"
 : "${RELEASE_ID:?RELEASE_ID must be set}"
-: "${SERVICE:?SERVICE must be set}"
+: "${PROJECT:?PROJECT must be set}"
 : "${IMAGE_TAG:?IMAGE_TAG must be set}"
 CONTINUO_TOKEN="${CONTINUO_TOKEN:-}"
 KIND="${KIND:-}"
 case "$KIND" in
-  ""|dbt|python-odcs|ontology) ;;
+  ""|dbt|python|ontology) ;;
   *)
-    echo "release.sh: unknown KIND \"${KIND}\": expected dbt, python-odcs or ontology" >&2
+    echo "release.sh: unknown KIND \"${KIND}\": expected dbt, python or ontology" >&2
     exit 2
     ;;
 esac
@@ -387,21 +387,21 @@ api_fail() {
     echo "response body: ${snippet}" >&2
   fi
   if [ "$HTTP_STATUS" = "403" ] && [ "$code" = "bootstrap_not_allowed" ]; then
-    echo "Bootstrapping this service needs an operator token (CONTINUO_TOKEN) or a ciAuth binding with allowBootstrap: true." >&2
+    echo "Bootstrapping this project needs an operator token (CONTINUO_TOKEN) or a ciAuth binding with allowBootstrap: true." >&2
   fi
   if [ "$HTTP_STATUS" = "400" ] && [ "$REBASELINE" = "true" ] && [[ $error == *rebaseline* ]]; then
     echo "This continuo does not accept rebaseline: upgrade continuo to the release that adds rebaseline releases, then run this release again." >&2
   fi
 }
 
-echo "Driving release ${RELEASE_ID} (service=${SERVICE}, kind=${KIND:-dbt}, image_tag=${IMAGE_TAG}) against ${BASE_URL}"
+echo "Driving release ${RELEASE_ID} (project=${PROJECT}, kind=${KIND:-dbt}, image_tag=${IMAGE_TAG}) against ${BASE_URL}"
 
 # Bootstrap decision, three paths:
-#   - unseeded prod: GET /api/v1/current-prod returns current_prod_release_id=""
+#   - no live release: GET /api/v1/live-release returns live_release_id=""
 #     when production has never been seeded — the first release must bootstrap
 #     (promote without validation), since a normal release would be rejected
-#     because every cross-service upstream looks new against empty prod;
-#   - FORCE_BOOTSTRAP=true: deliberate promotion of a seeded prod without
+#     because every cross-project upstream looks new against an empty production;
+#   - FORCE_BOOTSTRAP=true: deliberate promotion over a live release without
 #     validation;
 #   - REBASELINE=true: the release continuo asks for after it changes its
 #     content-hash formula, when every stored hash mismatches — a normal
@@ -410,27 +410,27 @@ echo "Driving release ${RELEASE_ID} (service=${SERVICE}, kind=${KIND:-dbt}, imag
 #     "rebaseline": true so continuo records every seed at its new hash.
 # A failed read stops the run: guessing "unseeded" would turn it into a
 # bootstrap that skips validation.
-api GET /api/v1/current-prod
+api GET /api/v1/live-release
 if [ "$HTTP_STATUS" != "200" ]; then
-  api_fail "GET /api/v1/current-prod"
+  api_fail "GET /api/v1/live-release"
   exit 1
 fi
-CUR_ID="$(jq -r '.current_prod_release_id // empty' <<<"$HTTP_BODY")"
-if [ "$REBASELINE" = "true" ] || [ "$FORCE_BOOTSTRAP" = "true" ] || [ -z "$CUR_ID" ]; then BOOTSTRAP=true; else BOOTSTRAP=false; fi
-echo "current_prod release_id='${CUR_ID}' force_bootstrap=${FORCE_BOOTSTRAP} rebaseline=${REBASELINE} -> bootstrap=${BOOTSTRAP}"
+LIVE_ID="$(jq -r '.live_release_id // empty' <<<"$HTTP_BODY")"
+if [ "$REBASELINE" = "true" ] || [ "$FORCE_BOOTSTRAP" = "true" ] || [ -z "$LIVE_ID" ]; then BOOTSTRAP=true; else BOOTSTRAP=false; fi
+echo "live release_id='${LIVE_ID}' force_bootstrap=${FORCE_BOOTSTRAP} rebaseline=${REBASELINE} -> bootstrap=${BOOTSTRAP}"
 
 BODY="$(jq -n \
   --arg release_id "$RELEASE_ID" \
-  --arg service "$SERVICE" \
+  --arg project "$PROJECT" \
   --arg image_tag "$IMAGE_TAG" \
   --argjson bootstrap "$BOOTSTRAP" \
   --argjson rebaseline "$REBASELINE" \
   --arg kind "$KIND" \
   --arg repo "$REPO" \
   --arg commit_sha "$COMMIT_SHA" \
-  '{release_id: $release_id, service: $service, image_tag: $image_tag, bootstrap: $bootstrap}
+  '{release_id: $release_id, project: $project, image_tag: $image_tag, bootstrap: $bootstrap}
    + (if $rebaseline then {rebaseline: true} else {} end)
-   + (if ($kind == "python-odcs" or $kind == "ontology") then {kind: $kind} else {} end)
+   + (if ($kind == "python" or $kind == "ontology") then {kind: $kind} else {} end)
    + (if $repo != "" then {repo: $repo} else {} end)
    + (if $commit_sha != "" then {commit_sha: $commit_sha} else {} end)')"
 echo "POST /api/v1/releases ${BODY}"

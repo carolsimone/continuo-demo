@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Generate the two transaction seeds, carrying the fee the company earns.
 
-Writes services/core/seeds/seed_card_transactions.csv and
-services/core/seeds/seed_fx_transactions.csv. Reads
+Writes projects/core/seeds/seed_card_transactions.csv and
+projects/core/seeds/seed_fx_transactions.csv. Reads
 seed_user_acquisition.csv, so run gen_users.py first.
 
 fee_amount is the reason this generator exists. Before it, every transaction
@@ -27,14 +27,18 @@ Run from repo root (AFTER gen_users.py):
 import csv
 import hashlib
 import importlib.util
+import logging
 import os
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
+log = logging.getLogger(__name__)
+
 ROOT = Path(__file__).resolve().parents[1]
-ACQ_SRC = ROOT / "services" / "marketing" / "seeds" / "seed_user_acquisition.csv"
-CARD_DST = ROOT / "services" / "core" / "seeds" / "seed_card_transactions.csv"
-FX_DST = ROOT / "services" / "core" / "seeds" / "seed_fx_transactions.csv"
+ACQ_SRC = ROOT / "projects" / "marketing" / "seeds" / "seed_user_acquisition.csv"
+CARD_DST = ROOT / "projects" / "core" / "seeds" / "seed_card_transactions.csv"
+FX_DST = ROOT / "projects" / "core" / "seeds" / "seed_fx_transactions.csv"
 
 # A non-empty SEED_SALT draws a different dataset from the same rules: the
 # agent-remediation eval grades a fix on data the fix never ran on. Unset, the
@@ -207,9 +211,10 @@ def main() -> None:
                                           "created_at", "fee_amount"])
         w.writeheader()
         w.writerows(fx)
-    print(f"wrote {len(card)} rows to {CARD_DST}")
-    print(f"wrote {len(fx)} rows to {FX_DST}")
+    log.info("wrote %s rows to %s", len(card), CARD_DST)
+    log.info("wrote %s rows to %s", len(fx), FX_DST)
 
 
 if __name__ == "__main__":
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(message)s")
     main()

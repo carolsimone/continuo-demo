@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Local functional smoke for the finance customname-dbt CLI. Builds the finance
 # image, stands up an ephemeral postgres with a minimal analytics schema + a
-# stub of the cross-service upstream (analytics.seed_fx_transactions), then
+# stub of the cross-project upstream (analytics.seed_fx_transactions), then
 # exercises every verb the deployed dialect routes through customname-dbt:
 # compile-project, load-seed, run-model, build-model, test-model, reload-seed,
 # rebuild-model. Exits non-zero on the first failure. Gate every finance push
@@ -21,7 +21,7 @@ trap cleanup EXIT
 cleanup
 
 echo "== build finance image (real Dockerfile) =="
-docker build -t "$IMG" -f "$ROOT/services/finance/Dockerfile" "$ROOT/services/finance"
+docker build -t "$IMG" -f "$ROOT/projects/finance/Dockerfile" "$ROOT/projects/finance"
 
 echo "== start ephemeral postgres =="
 docker network create "$NET" >/dev/null
@@ -35,7 +35,7 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 
-echo "== create analytics schema + cross-service upstream stub =="
+echo "== create analytics schema + cross-project upstream stub =="
 docker exec -i "$PG" psql -U continuo_svc -d continuo_dbt <<'SQL'
 CREATE SCHEMA IF NOT EXISTS analytics;
 DROP TABLE IF EXISTS analytics.seed_fx_transactions;

@@ -1,7 +1,8 @@
 name: release
 
-# Deploy a dbt model change through continuo's blue/green pipeline:
-# build+push the per-service images, then POST a release to continuo
+# Release a project change through continuo: build and push the changed
+# project's image, then POST the release to continuo, which validates it as a
+# candidate release before it promotes it
 # (a first release bootstraps only when the repository's continuo binding allows
 # it; see scripts/release.sh). dbt compile + manifest upload happen inside
 # continuo itself.
@@ -11,12 +12,12 @@ name: release
 # token, so the release job needs `id-token: write` and the repository must be
 # bound in continuo's `ciAuth.bindings`.
 #
-# Manual dispatch releases a named service at the current main HEAD, or, when the
+# Manual dispatch releases a named project at the current main HEAD, or, when the
 # name is ontology, the file ontology/ontology.yaml: the way to release it again when
 # the job of its push failed or never started. It can
 # force a bootstrap (promote without validation), or a rebaseline: a bootstrap
 # that also records every seed at its new content hash, so nothing validates and
-# no seed reloads. A rebaseline is the one release per service that continuo's
+# no seed reloads. A rebaseline is the one release per project that continuo's
 # upgrade notes ask for after continuo changes its hash formula, when a normal
 # release would validate the whole topology and reload every seed. Run one
 # dispatch at a time: the concurrency group keeps one waiting run, and a newer
@@ -27,13 +28,13 @@ on:
   push:
     branches: [main]
     paths:
-      - 'services/**'
+      - 'projects/**'
       - 'ontology/**'
       - '.github/workflows/release.yml'
   workflow_dispatch:
     inputs:
-      service:
-        description: "Service to release (a services/<name> directory), or ontology to release ontology/ontology.yaml (force_bootstrap and rebaseline do not apply to it)"
+      project:
+        description: "Project to release (a projects/<name> directory), or ontology to release ontology/ontology.yaml (force_bootstrap and rebaseline do not apply to it)"
         required: true
         type: string
       force_bootstrap:
@@ -52,8 +53,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Decide whether this push is releasable and which service it targets. Kept as
-  # its own job so a no-op push (CI/tooling/base only — no service changed) skips
+  # Decide whether this push is releasable and which project it targets. Kept as
+  # its own job so a no-op push (CI/tooling/base only — no project changed) skips
   # the release job cleanly via `if:` instead of failing partway through.
   detect:
     runs-on: ubuntu-latest
@@ -63,7 +64,7 @@ jobs:
     outputs:
       skip: ${{ steps.ids.outputs.skip }}
       skip_release: ${{ steps.ids.outputs.skip_release }}
-      service: ${{ steps.ids.outputs.service }}
+      project: ${{ steps.ids.outputs.project }}
       kind: ${{ steps.ids.outputs.kind }}
       image_tag: ${{ steps.ids.outputs.image_tag }}
       tag: ${{ steps.ids.outputs.tag }}
@@ -75,22 +76,34 @@ jobs:
         uses: actions/checkout@v4
         with:
           # Need history to diff this push against the previous main tip and
-          # identify which service changed.
+          # identify which project changed.
           fetch-depth: 0
 
-      - name: Compute release identifiers + changed service
+      - name: Compute release identifiers + changed project
         id: ids
+        # The dispatch inputs reach the script as env values, never as text pasted
+        # into it, so an input can never run as shell.
+        env:
+          INPUT_PROJECT: ${{ inputs.project }}
+          FORCE_BOOTSTRAP: ${{ inputs.force_bootstrap == true }}
+          REBASELINE: ${{ inputs.rebaseline == true }}
         run: |
           SHA="$(git rev-parse --short HEAD)"
 
-          # A manually dispatched run names its target service explicitly —
-          # required for a forced bootstrap, where no service directory has
-          # changed. A push release derives the service from the diff below.
+          # A manually dispatched run names its target project explicitly —
+          # required for a forced bootstrap, where no project directory has
+          # changed. A push release derives the project from the diff below.
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            SERVICE="${{ inputs.service }}"
-            # The ontology is not a services/<svc>/ folder. A dispatch for it releases
-            # ontology/ontology.yaml at this commit through release-ontology, and no service.
-            if [ "${SERVICE}" = "ontology" ]; then
+            PROJECT="${INPUT_PROJECT}"
+            # One folder name under projects/, written as a Docker image name, which the
+            # build pushes it as: no path, nothing hidden, no whitespace, no capital.
+            if ! [[ $PROJECT =~ ^[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*$ ]]; then
+              # The value is not echoed: a newline in it would start a workflow command.
+              echo "::error::the project input is not a project name: lowercase letters and digits, with '.', '_', '__' or '-' only between them, as a Docker image name is written"; exit 1
+            fi
+            # The ontology is not a projects/<project>/ folder. A dispatch for it releases
+            # ontology/ontology.yaml at this commit through release-ontology, and no project.
+            if [ "${PROJECT}" = "ontology" ]; then
               echo "Dispatched release: the ontology @ ${SHA}"
               {
                 echo "skip=true"
@@ -101,30 +114,30 @@ jobs:
               } >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            if [ ! -d "services/${SERVICE}" ]; then
-              echo "::error::unknown service '${SERVICE}' — no services/${SERVICE}/ directory"; exit 1
+            if [ ! -d "projects/${PROJECT}" ]; then
+              echo "::error::unknown project '${PROJECT}' — no projects/${PROJECT}/ directory"; exit 1
             fi
-            # A service is python-odcs iff its contracts/ holds *.odcs.yaml files;
-            # every other service is a dbt project.
-            if compgen -G "services/${SERVICE}/contracts/*.odcs.yaml" > /dev/null; then KIND="python-odcs"; else KIND="dbt"; fi
-            echo "Dispatched release: ${SERVICE} @ ${SHA} (kind=${KIND}, force_bootstrap=${{ inputs.force_bootstrap }}, rebaseline=${{ inputs.rebaseline }})"
+            # A project has the kind python when its contracts/ holds *.odcs.yaml files;
+            # every other project is a dbt project.
+            if compgen -G "projects/${PROJECT}/contracts/*.odcs.yaml" > /dev/null; then KIND="python"; else KIND="dbt"; fi
+            echo "Dispatched release: ${PROJECT} @ ${SHA} (kind=${KIND}, force_bootstrap=${FORCE_BOOTSTRAP}, rebaseline=${REBASELINE})"
             echo "skip=false" >> "$GITHUB_OUTPUT"
             echo "skip_release=false" >> "$GITHUB_OUTPUT"
             echo "tag=${SHA}" >> "$GITHUB_OUTPUT"
             echo "release_id=rel-${SHA}-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
-            echo "service=${SERVICE}" >> "$GITHUB_OUTPUT"
+            echo "project=${PROJECT}" >> "$GITHUB_OUTPUT"
             echo "kind=${KIND}" >> "$GITHUB_OUTPUT"
             echo "image_tag=${SHA}" >> "$GITHUB_OUTPUT"
-            # A dispatch for a service releases that service; the ontology is released by a push that
+            # A dispatch for a project releases that project; the ontology is released by a push that
             # changes its file, or by a dispatch that names it (above).
             echo "ontology_changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # continuo models a release as a SINGLE changed service: POST /releases
-          # takes one {service, image_tag} and the controller reconstructs the
-          # rest of the set from the live service_prod pointers. So we diff this
-          # push and require exactly one services/<svc>/ to have changed.
+          # continuo models a release as a SINGLE changed project: POST /releases
+          # takes one {project, image_tag} and continuo reconstructs the
+          # rest of the set from the production pointers. So we diff this
+          # push and require exactly one projects/<project>/ to have changed.
           BEFORE="${{ github.event.before }}"
           if [ -z "$BEFORE" ] \
              || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
@@ -135,22 +148,24 @@ jobs:
             echo "::error::cannot determine previous commit to diff against"; exit 1
           fi
 
-          CHANGED="$(git diff --name-only "$BEFORE" HEAD -- 'services/' | cut -d/ -f1-2 | sort -u)"
+          CHANGED="$(git diff --name-only "$BEFORE" HEAD -- 'projects/' | cut -d/ -f1-2 | sort -u)"
           COUNT="$(printf '%s\n' "$CHANGED" | grep -c . || true)"
 
-          # More than one service is ambiguous under the single-service contract.
+          # More than one project is ambiguous under the single-project contract.
           if [ "$COUNT" -gt 1 ]; then
-            echo "::error::continuo accepts exactly one changed service per release; found ${COUNT}:"
+            echo "::error::continuo accepts exactly one changed project per release; found ${COUNT}:"
             printf '%s\n' "$CHANGED"
             exit 1
           fi
 
           # The ontology is one file, ontology/ontology.yaml, released as its own
-          # service by the release-ontology job once the service job has ended. It
-          # is not a services/<svc>/ folder, so it never counts toward the one
-          # changed service above, and a push that changes a service and the
-          # ontology is one release of each, the service first. These outputs are
-          # written only after the refusal above, so a refused push exposes none.
+          # project by the release-ontology job once the project job has ended. It
+          # is not a projects/<project>/ folder, so it never counts toward the one
+          # changed project above, and a push that changes a project and the
+          # ontology is one release of each, the project first. These outputs are
+          # written after the refusal of two changed projects; a push that the checks
+          # of the one changed project refuse further down has them written, and the
+          # release-ontology job, which requires detect to succeed, still releases nothing.
           if [ -n "$(git diff --name-only "$BEFORE" HEAD -- ontology/ontology.yaml)" ]; then
             ONTOLOGY_CHANGED=true
           else
@@ -162,25 +177,42 @@ jobs:
             echo "ontology_release_id=rel-${SHA}-${GITHUB_RUN_NUMBER}-ontology"
           } >> "$GITHUB_OUTPUT"
 
-          # No service changed → no service to release; skip the release job.
+          # No project changed → no project to release; skip the release job.
           if [ "$COUNT" -eq 0 ]; then
-            echo "No service change in this push — skipping the service release (ontology changed: ${ONTOLOGY_CHANGED})."
+            echo "No project change in this push — skipping the project release (ontology changed: ${ONTOLOGY_CHANGED})."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "skip_release=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Exactly one service changed → normal single-service release.
-          SERVICE="$(printf '%s' "$CHANGED" | cut -d/ -f2)"
-          # A service is python-odcs iff its contracts/ holds *.odcs.yaml files;
-          # every other service is a dbt project.
-          if compgen -G "services/${SERVICE}/contracts/*.odcs.yaml" > /dev/null; then KIND="python-odcs"; else KIND="dbt"; fi
-          echo "Changed service: ${SERVICE} @ ${SHA} (kind=${KIND})"
+          # Exactly one project changed → normal single-project release.
+          PROJECT="$(printf '%s' "$CHANGED" | cut -d/ -f2)"
+          # The later steps paste the project into their scripts and push it as a Docker
+          # image name, so a folder name that is not a plain project name is refused here,
+          # as a dispatch input is.
+          if ! [[ $PROJECT =~ ^[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*$ ]]; then
+            # The value is not echoed: a newline in it would start a workflow command.
+            echo "::error::the changed folder under projects/ is not a project name: lowercase letters and digits, with '.', '_', '__' or '-' only between them, as a Docker image name is written"; exit 1
+          fi
+          # A file directly under projects/, or a project folder the push deleted, is no
+          # project to build.
+          if [ ! -d "projects/${PROJECT}" ]; then
+            echo "::error::projects/${PROJECT} is not a project folder at this commit"; exit 1
+          fi
+          # ontology is the project of ontology/ontology.yaml, kind ontology, so a folder of
+          # that name would be released as a second project of that name.
+          if [ "${PROJECT}" = "ontology" ]; then
+            echo "::error::projects/ontology cannot be a project: ontology is the project of ontology/ontology.yaml"; exit 1
+          fi
+          # A project has the kind python when its contracts/ holds *.odcs.yaml files;
+          # every other project is a dbt project.
+          if compgen -G "projects/${PROJECT}/contracts/*.odcs.yaml" > /dev/null; then KIND="python"; else KIND="dbt"; fi
+          echo "Changed project: ${PROJECT} @ ${SHA} (kind=${KIND})"
 
           echo "skip=false" >> "$GITHUB_OUTPUT"
           echo "skip_release=false" >> "$GITHUB_OUTPUT"
           echo "release_id=rel-${SHA}-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
-          echo "service=${SERVICE}" >> "$GITHUB_OUTPUT"
+          echo "project=${PROJECT}" >> "$GITHUB_OUTPUT"
           echo "kind=${KIND}" >> "$GITHUB_OUTPUT"
           echo "image_tag=${SHA}" >> "$GITHUB_OUTPUT"
 
@@ -217,34 +249,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Full history so the changed-service diff resolves.
+          # Full history so the changed-project diff resolves.
           fetch-depth: 0
 
-      # A python-odcs service (services/<svc>/contracts/*.odcs.yaml) goes
+      # A python project (projects/<project>/contracts/*.odcs.yaml) goes
       # through the continuo-python-runtime CLI around the image build: lint
       # the scripts and validate the contracts against the install's warehouse
       # dialect before it, then pack them into the ODCS bundle once the image
-      # is pushed. dbt services skip all of this — their compile leg runs
+      # is pushed. dbt projects skip all of this — their compile leg runs
       # inside continuo itself.
       - name: Set up uv
-        if: needs.detect.outputs.kind == 'python-odcs' && needs.detect.outputs.skip_release != 'true'
+        if: needs.detect.outputs.kind == 'python' && needs.detect.outputs.skip_release != 'true'
         uses: astral-sh/setup-uv@v5
 
-      # The CLI must be the runtime the service image runs: from runtime 0.12.0
+      # The CLI must be the runtime the project image runs: from runtime 0.12.0
       # on, the image's harness recomputes at start the hashes this CLI writes
       # and refuses to run on a mismatch. So the version is read from the
-      # service Dockerfile's FROM line, the one place it is written: a runtime
+      # project Dockerfile's FROM line, the one place it is written: a runtime
       # upgrade is a change to that line alone, and the step after the install
       # checks that the CLI is that version.
-      - name: Read the runtime version from the service image
+      - name: Read the runtime version from the project image
         id: runtime
-        if: needs.detect.outputs.kind == 'python-odcs' && needs.detect.outputs.skip_release != 'true'
+        if: needs.detect.outputs.kind == 'python' && needs.detect.outputs.skip_release != 'true'
         run: |
-          version="$(python3 scripts/image_pins.py runtime-version "services/${{ needs.detect.outputs.service }}")"
+          version="$(python3 scripts/image_pins.py runtime-version "projects/${{ needs.detect.outputs.project }}")"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Install continuo-python-runtime
-        if: needs.detect.outputs.kind == 'python-odcs' && needs.detect.outputs.skip_release != 'true'
+        if: needs.detect.outputs.kind == 'python' && needs.detect.outputs.skip_release != 'true'
         env:
           RUNTIME_VERSION: ${{ steps.runtime.outputs.version }}
         run: |
@@ -252,26 +284,29 @@ jobs:
             uv tool install "git+https://github.com/carolsimone/continuo-python-runtime@v${RUNTIME_VERSION}"
 
       - name: Check the installed runtime is the image's
-        if: needs.detect.outputs.kind == 'python-odcs' && needs.detect.outputs.skip_release != 'true'
+        if: needs.detect.outputs.kind == 'python' && needs.detect.outputs.skip_release != 'true'
         # `--color never` keeps forced-colour escapes out of uv's output, and the
         # output is captured first because GitHub's default shell has no pipefail:
         # a failing `uv tool list` would otherwise read as "not installed".
         run: |
           listed="$(uv tool list --color never)"
-          python3 scripts/image_pins.py check-installed "services/${{ needs.detect.outputs.service }}" <<< "$listed"
+          python3 scripts/image_pins.py check-installed "projects/${{ needs.detect.outputs.project }}" <<< "$listed"
 
-      # Fast feedback only: this only looks at the service's scripts/. The `pack`
+      # Fast feedback only: this only looks at the project's scripts/. The `pack`
       # below independently lints the script plus its whole in-repo import closure,
       # so a helper outside scripts/ is still covered.
       - name: Lint python scripts (no hand-written SQL)
-        if: needs.detect.outputs.kind == 'python-odcs' && needs.detect.outputs.skip_release != 'true'
-        run: continuo-runtime lint "services/${{ needs.detect.outputs.service }}/scripts"
+        if: needs.detect.outputs.kind == 'python' && needs.detect.outputs.skip_release != 'true'
+        run: continuo-runtime lint "projects/${{ needs.detect.outputs.project }}/scripts"
 
       # --dialect postgres checks each declared read against the install's own
-      # warehouse dialect, not just sqlglot's dialect-neutral grammar.
+      # warehouse dialect, not just sqlglot's dialect-neutral grammar. --project
+      # refuses a contract that names another project, and --ontology checks the
+      # bindings against the ontology of this checkout, as ci.yml's python-checks
+      # does, so a dispatched release meets the pull request's check.
       - name: Validate python contracts
-        if: needs.detect.outputs.kind == 'python-odcs' && needs.detect.outputs.skip_release != 'true'
-        run: continuo-runtime validate "services/${{ needs.detect.outputs.service }}/contracts" --dialect postgres
+        if: needs.detect.outputs.kind == 'python' && needs.detect.outputs.skip_release != 'true'
+        run: continuo-runtime validate "projects/${{ needs.detect.outputs.project }}/contracts" --dialect postgres --project "${{ needs.detect.outputs.project }}" --ontology ontology/ontology.yaml
 
       # Registers the QEMU binfmt handlers that let this amd64 runner execute
       # arm64 binaries, which is what the linux/arm64 half of the image build
@@ -288,48 +323,48 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # Only the changed service gets a new image at this commit's tag; the
-      # other services keep their current prod image tags (the controller reuses
-      # them via the service_prod pointers), so there is nothing to rebuild.
+      # Only the changed project gets a new image at this commit's tag; the
+      # other projects keep the image tags production runs (continuo reuses
+      # them via the production pointers), so there is nothing to rebuild.
       #
       # Both platforms are built because the cluster pulling these images decides
       # the architecture, and a single-platform image is simply unpullable
       # elsewhere: an arm64 node rejects an amd64-only manifest list outright
       # ("no matching manifest for linux/arm64"). Apple Silicon laptops running a
       # local kind cluster are the common case that hits this.
-      - name: Build and push the changed service image
+      - name: Build and push the changed project image
         if: needs.detect.outputs.skip_release != 'true'
         run: |
-          svc="${{ needs.detect.outputs.service }}"
+          project="${{ needs.detect.outputs.project }}"
           docker buildx build \
             --push \
             --platform linux/amd64,linux/arm64 \
-            -t "${DOCKERHUB_USERNAME}/${svc}:${{ needs.detect.outputs.tag }}" \
-            -t "${DOCKERHUB_USERNAME}/${svc}:latest" \
-            --cache-from "type=gha,scope=${svc}" \
-            --cache-to "type=gha,mode=max,scope=${svc}" \
-            "services/${svc}"
+            -t "${DOCKERHUB_USERNAME}/${project}:${{ needs.detect.outputs.tag }}" \
+            -t "${DOCKERHUB_USERNAME}/${project}:latest" \
+            --cache-from "type=gha,scope=${project}" \
+            --cache-to "type=gha,mode=max,scope=${project}" \
+            "projects/${project}"
 
-      # continuo runs a python-kind image_tag verbatim — nothing is composed
+      # continuo runs a Python project's image_tag verbatim — nothing is composed
       # on its side the way the bare short sha is for a dbt release — so this
       # must be the full pullable registry ref, not just the tag the build
       # step above already pushed under.
       - name: Compose full image ref for python release
-        if: needs.detect.outputs.kind == 'python-odcs' && needs.detect.outputs.skip_release != 'true'
+        if: needs.detect.outputs.kind == 'python' && needs.detect.outputs.skip_release != 'true'
         run: |
-          echo "PYTHON_IMAGE_TAG=docker.io/${DOCKERHUB_USERNAME}/${{ needs.detect.outputs.service }}:${{ needs.detect.outputs.tag }}" >> "$GITHUB_ENV"
+          echo "PYTHON_IMAGE_TAG=docker.io/${DOCKERHUB_USERNAME}/${{ needs.detect.outputs.project }}:${{ needs.detect.outputs.tag }}" >> "$GITHUB_ENV"
 
       # --image is the full ref composed above, so this runs after the image
-      # is pushed. --repo-root is the SERVICE's own directory, not the monorepo
-      # root: each python-odcs service is a self-contained project the same way
-      # a dbt service is, and repo-root is what the in-repo import closure
+      # is pushed. --repo-root is the PROJECT's own directory, not the monorepo
+      # root: each Python project stands on its own in its folder, the same way
+      # a dbt project does, and repo-root is what the in-repo import closure
       # (folded into shared_code_hash) resolves against.
       - name: Pack the ODCS bundle
-        if: needs.detect.outputs.kind == 'python-odcs' && needs.detect.outputs.skip_release != 'true'
+        if: needs.detect.outputs.kind == 'python' && needs.detect.outputs.skip_release != 'true'
         run: |
-          continuo-runtime pack "services/${{ needs.detect.outputs.service }}/contracts" \
-            --service "${{ needs.detect.outputs.service }}" \
-            --repo-root "services/${{ needs.detect.outputs.service }}" \
+          continuo-runtime pack "projects/${{ needs.detect.outputs.project }}/contracts" \
+            --project "${{ needs.detect.outputs.project }}" \
+            --repo-root "projects/${{ needs.detect.outputs.project }}" \
             --dialect postgres \
             --image "${PYTHON_IMAGE_TAG}" \
             --out "${RUNNER_TEMP}/odcs-bundle.json"
@@ -341,13 +376,13 @@ jobs:
       # target "hetzner") — the same Hetzner object-storage account continuo's
       # own S3-compatible install still points at.
       - name: Upload odcs-bundle.json to S3
-        if: needs.detect.outputs.kind == 'python-odcs' && needs.detect.outputs.skip_release != 'true'
+        if: needs.detect.outputs.kind == 'python' && needs.detect.outputs.skip_release != 'true'
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
         run: |
           aws s3 cp "${RUNNER_TEMP}/odcs-bundle.json" \
-            "s3://continuo-dev/${{ needs.detect.outputs.service }}/${{ needs.detect.outputs.release_id }}/odcs-bundle.json" \
+            "s3://continuo-dev/${{ needs.detect.outputs.project }}/${{ needs.detect.outputs.release_id }}/odcs-bundle.json" \
             --endpoint-url https://nbg1.your-objectstorage.com \
             --region eu-central-1
 
@@ -357,11 +392,11 @@ jobs:
           # Origin of continuo's ui, e.g. https://continuo.example.com.
           CONTINUO_URL: ${{ vars.CONTINUO_URL }}
           RELEASE_ID: ${{ needs.detect.outputs.release_id }}
-          SERVICE: ${{ needs.detect.outputs.service }}
+          PROJECT: ${{ needs.detect.outputs.project }}
           # dbt keeps the bare short sha continuo composes into a pull ref
           # itself; python carries the full ref composed above, since
           # continuo runs a python image_tag verbatim.
-          IMAGE_TAG: ${{ needs.detect.outputs.kind == 'python-odcs' && env.PYTHON_IMAGE_TAG || needs.detect.outputs.image_tag }}
+          IMAGE_TAG: ${{ needs.detect.outputs.kind == 'python' && env.PYTHON_IMAGE_TAG || needs.detect.outputs.image_tag }}
           KIND: ${{ needs.detect.outputs.kind }}
           REPO: ${{ github.repository }}
           COMMIT_SHA: ${{ github.sha }}
@@ -372,16 +407,16 @@ jobs:
           REBASELINE: ${{ inputs.rebaseline == true }}
         run: bash scripts/release.sh
 
-  # The ontology (ontology/ontology.yaml) is released as the service `ontology`,
+  # The ontology (ontology/ontology.yaml) is released as the project `ontology`,
   # kind `ontology`: continuo reads the file from object storage, so the upload
   # completes before the POST, as the ODCS bundle's does. It runs after the
-  # release job, when the same push changes a service, so continuo checks the
-  # new service contracts against the ontology the service was written for only
-  # once the service itself is released; and only when that release succeeded or
-  # was skipped (no service changed). !cancelled() lets it run after a skipped
+  # release job, when the same push changes a project, so continuo checks the
+  # new project contracts against the ontology the project was written for only
+  # once the project itself is released; and only when that release succeeded or
+  # was skipped (no project changed). !cancelled() lets it run after a skipped
   # release job, and not in a cancelled run; the detect result is named too, so a
   # refused push, where release is skipped as well, releases nothing. A rejected
-  # service release stops it. The pull request that changes the file ran
+  # project release stops it. The pull request that changes the file ran
   # `continuo-contracts ontology check` (ci.yml), so this job runs no check.
   release-ontology:
     needs: [detect, release]
@@ -423,7 +458,7 @@ jobs:
         env:
           CONTINUO_URL: ${{ vars.CONTINUO_URL }}
           RELEASE_ID: ${{ needs.detect.outputs.ontology_release_id }}
-          SERVICE: ontology
+          PROJECT: ontology
           IMAGE_TAG: ${{ needs.detect.outputs.tag }}
           KIND: ontology
           REPO: ${{ github.repository }}

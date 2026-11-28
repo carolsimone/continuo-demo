@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Read the pins a service image declares.
+"""Read the pins a project image declares.
 
-Subcommands, each taking a service directory:
+Subcommands, each taking a project directory:
 
   runtime-version  print the continuo-python-runtime version the FROM line of
                    <dir>/Dockerfile names (stdout carries only that version).
@@ -12,7 +12,7 @@ Subcommands, each taking a service directory:
   dbt-requirements print one name==version line for each dbt package
                    <dir>/Dockerfile pins, in the order of DBT_PACKAGES (stdout
                    carries only those lines), the list to install into a
-                   virtualenv that runs the dbt of the service image.
+                   virtualenv that runs the dbt of the project image.
 
 Diagnostics go to stderr through logging; the exit status is 0 on success and 1
 on a failed check. The module uses the standard library only.
@@ -123,16 +123,16 @@ def dbt_requirements(dockerfile_text: str) -> List[str]:
     """The `name==version` requirement of each dbt package the dbt `RUN pip install` instruction pins.
 
     The order is that of DBT_PACKAGES, whatever order the instruction names them in. A package the
-    instruction does not install is left out, as in dbt_pins; check_dbt_service reports it.
+    instruction does not install is left out, as in dbt_pins; check_dbt_project reports it.
     """
     pins = dbt_pins(dockerfile_text)
     return [f"{package}=={pins[package]}" for package in DBT_PACKAGES if package in pins]
 
 
-def _dbt_service_report(service_dir: Union[pathlib.Path, str]) -> Tuple[List[str], Dict[str, str]]:
-    """The problems of a dbt service's Dockerfiles, and the pins of its Dockerfile."""
-    dockerfile = f"{service_dir}/Dockerfile"
-    local = f"{service_dir}/Dockerfile.local"
+def _dbt_project_report(project_dir: Union[pathlib.Path, str]) -> Tuple[List[str], Dict[str, str]]:
+    """The problems of a dbt project's Dockerfiles, and the pins of its Dockerfile."""
+    dockerfile = f"{project_dir}/Dockerfile"
+    local = f"{project_dir}/Dockerfile.local"
     text = _read_dockerfile(dockerfile)
     if text is None:
         return [f"{dockerfile}: no such file"], {}
@@ -162,9 +162,9 @@ def _dbt_service_report(service_dir: Union[pathlib.Path, str]) -> Tuple[List[str
     return problems, pins_by_path.get(dockerfile, {})
 
 
-def check_dbt_service(service_dir: Union[pathlib.Path, str]) -> List[str]:
-    """The problems of <dir>/Dockerfile and, when present, <dir>/Dockerfile.local; empty when the service passes."""
-    return _dbt_service_report(service_dir)[0]
+def check_dbt_project(project_dir: Union[pathlib.Path, str]) -> List[str]:
+    """The problems of <dir>/Dockerfile and, when present, <dir>/Dockerfile.local; empty when the project passes."""
+    return _dbt_project_report(project_dir)[0]
 
 
 def _read_dockerfile(path: str) -> Optional[str]:
@@ -176,9 +176,9 @@ def _read_dockerfile(path: str) -> Optional[str]:
         return None
 
 
-def _wanted_runtime(service_dir: str) -> Optional[str]:
-    """The runtime version <service_dir>/Dockerfile names, logging an error and returning None when it names none."""
-    path = f"{service_dir}/Dockerfile"
+def _wanted_runtime(project_dir: str) -> Optional[str]:
+    """The runtime version <project_dir>/Dockerfile names, logging an error and returning None when it names none."""
+    path = f"{project_dir}/Dockerfile"
     text = _read_dockerfile(path)
     if text is None:
         log.error("%s: no such file", path)
@@ -190,20 +190,20 @@ def _wanted_runtime(service_dir: str) -> Optional[str]:
         return None
 
 
-def _cmd_runtime_version(service_dir: str, stdout: TextIO) -> int:
-    wanted = _wanted_runtime(service_dir)
+def _cmd_runtime_version(project_dir: str, stdout: TextIO) -> int:
+    wanted = _wanted_runtime(project_dir)
     if wanted is None:
         return 1
     stdout.write(wanted + "\n")
     return 0
 
 
-def _cmd_check_installed(service_dir: str, stdin: TextIO) -> int:
-    wanted = _wanted_runtime(service_dir)
+def _cmd_check_installed(project_dir: str, stdin: TextIO) -> int:
+    wanted = _wanted_runtime(project_dir)
     if wanted is None:
         return 1
     installed = installed_runtime_version(stdin.read())
-    path = f"{service_dir}/Dockerfile"
+    path = f"{project_dir}/Dockerfile"
     if installed is None:
         log.error(
             "continuo-python-runtime is not installed (uv tool list has no continuo-python-runtime line); %s names %s",
@@ -218,18 +218,18 @@ def _cmd_check_installed(service_dir: str, stdin: TextIO) -> int:
     return 0
 
 
-def _cmd_check_dbt(service_dir: str) -> int:
-    problems, pins = _dbt_service_report(service_dir)
+def _cmd_check_dbt(project_dir: str) -> int:
+    problems, pins = _dbt_project_report(project_dir)
     if problems:
         for problem in problems:
             log.error("%s", problem)
         return 1
-    log.info("%s pins %s", service_dir, " ".join(f"{package}=={pins[package]}" for package in DBT_PACKAGES))
+    log.info("%s pins %s", project_dir, " ".join(f"{package}=={pins[package]}" for package in DBT_PACKAGES))
     return 0
 
 
-def _cmd_dbt_requirements(service_dir: str, stdout: TextIO) -> int:
-    path = f"{service_dir}/Dockerfile"
+def _cmd_dbt_requirements(project_dir: str, stdout: TextIO) -> int:
+    path = f"{project_dir}/Dockerfile"
     text = _read_dockerfile(path)
     if text is None:
         log.error("%s: no such file", path)
@@ -258,16 +258,16 @@ def main(
         ("dbt-requirements", "print the name==version requirement of each dbt package the Dockerfile pins"),
     ):
         command = commands.add_parser(name, help=help_text, description=help_text)
-        command.add_argument("service_dir", help="the service directory that holds the Dockerfile")
+        command.add_argument("project_dir", help="the project directory that holds the Dockerfile")
     args = parser.parse_args(argv)
 
     if args.command == "runtime-version":
-        return _cmd_runtime_version(args.service_dir, stdout if stdout is not None else sys.stdout)
+        return _cmd_runtime_version(args.project_dir, stdout if stdout is not None else sys.stdout)
     if args.command == "check-dbt":
-        return _cmd_check_dbt(args.service_dir)
+        return _cmd_check_dbt(args.project_dir)
     if args.command == "dbt-requirements":
-        return _cmd_dbt_requirements(args.service_dir, stdout if stdout is not None else sys.stdout)
-    return _cmd_check_installed(args.service_dir, stdin if stdin is not None else sys.stdin)
+        return _cmd_dbt_requirements(args.project_dir, stdout if stdout is not None else sys.stdout)
+    return _cmd_check_installed(args.project_dir, stdin if stdin is not None else sys.stdin)
 
 
 if __name__ == "__main__":

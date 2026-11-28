@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate services/finance/seeds/seed_operational_costs.csv.
+"""Generate projects/finance/seeds/seed_operational_costs.csv.
 
 One row per (cost line, month) for 2023-01 .. 2024-12 — the window covered by
 core's seed_users. Costs and user acquisition must overlap, otherwise
@@ -12,11 +12,15 @@ Run from repo root:  uv run python scripts/gen_operational_costs.py
 """
 import csv
 import hashlib
+import logging
 import os
+import sys
 from pathlib import Path
 
+log = logging.getLogger(__name__)
+
 ROOT = Path(__file__).resolve().parents[1]
-DST = ROOT / "services" / "finance" / "seeds" / "seed_operational_costs.csv"
+DST = ROOT / "projects" / "finance" / "seeds" / "seed_operational_costs.csv"
 
 # A non-empty SEED_SALT draws a different dataset from the same rules: the
 # agent-remediation eval grades a fix on data the fix never ran on. Unset, the
@@ -92,8 +96,9 @@ def main():
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         w.writeheader()
         w.writerows(rows)
-    print(f"Wrote {len(rows)} rows to {DST.relative_to(ROOT)}")
+    log.info("Wrote %s rows to %s", len(rows), DST.relative_to(ROOT))
 
 
 if __name__ == "__main__":
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(message)s")
     main()

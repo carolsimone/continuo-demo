@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Generate the two user seeds from a single source of truth.
 
-Writes services/core/seeds/seed_users.csv and
-services/marketing/seeds/seed_user_acquisition.csv.
+Writes projects/core/seeds/seed_users.csv and
+projects/marketing/seeds/seed_user_acquisition.csv.
 
 The two files must agree on user_id -> date: finance allocates operational cost
 by core's seed_users.created_at, marketing allocates spend by
@@ -17,12 +17,16 @@ Run from repo root:  uv run python scripts/gen_users.py
 """
 import csv
 import hashlib
+import logging
 import os
+import sys
 from pathlib import Path
 
+log = logging.getLogger(__name__)
+
 ROOT = Path(__file__).resolve().parents[1]
-USERS_DST = ROOT / "services" / "core" / "seeds" / "seed_users.csv"
-ACQ_DST = ROOT / "services" / "marketing" / "seeds" / "seed_user_acquisition.csv"
+USERS_DST = ROOT / "projects" / "core" / "seeds" / "seed_users.csv"
+ACQ_DST = ROOT / "projects" / "marketing" / "seeds" / "seed_user_acquisition.csv"
 
 # A non-empty SEED_SALT draws a different dataset from the same rules: the
 # agent-remediation eval grades a fix on data the fix never ran on. Unset, the
@@ -159,9 +163,10 @@ def main() -> None:
     users, acquisitions = build_rows()
     _write(USERS_DST, users, ["user_id", "name", "email", "birth_year", "created_at"])
     _write(ACQ_DST, acquisitions, ["user_id", "channel", "campaign", "acquired_at"])
-    print(f"wrote {len(users)} rows to {USERS_DST}")
-    print(f"wrote {len(acquisitions)} rows to {ACQ_DST}")
+    log.info("wrote %s rows to %s", len(users), USERS_DST)
+    log.info("wrote %s rows to %s", len(acquisitions), ACQ_DST)
 
 
 if __name__ == "__main__":
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(message)s")
     main()

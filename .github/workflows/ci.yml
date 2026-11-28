@@ -1,34 +1,28 @@
 name: ci
 
-# continuo models a release as a SINGLE changed service (see release.yml), so a
-# PR touching more than one services/<svc>/ can never be released as-is. Catch
+# continuo models a release as a SINGLE changed project (see release.yml), so a
+# PR touching more than one projects/<project>/ can never be released as-is. Catch
 # that at PR time instead of letting it land on main and fail release.yml.
+#
+# Every pull request starts it, with no paths filter: the scripts job's glossary
+# check reads every tracked file and path, so a pull request that adds or changes
+# any file, a new one in a new folder included, is checked.
 on:
   pull_request:
     branches: [main]
-    paths:
-      - 'services/**'
-      - 'ontology/**'
-      - 'scripts/release.sh'
-      - 'scripts/image_pins.py'
-      - 'scripts/tests/test_release_sh.py'
-      - 'scripts/tests/test_image_pins.py'
-      - 'scripts/tests/test_workflows.py'
-      - '.github/workflows/ci.yml'
-      - '.github/workflows/release.yml'
 
 env:
   # The continuo-contracts version that continuo's topology-controller/pyproject.toml pins on main.
-  CONTINUO_CONTRACTS_VERSION: "0.4.1"
+  CONTINUO_CONTRACTS_VERSION: "0.5.0"
 
 jobs:
-  check-single-service:
+  check-single-project:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
     outputs:
-      service: ${{ steps.check.outputs.service }}
+      project: ${{ steps.check.outputs.project }}
       kind: ${{ steps.check.outputs.kind }}
       ontology_changed: ${{ steps.check.outputs.ontology_changed }}
     steps:
@@ -38,7 +32,7 @@ jobs:
           # Need history to diff the PR's base against its head.
           fetch-depth: 0
 
-      - name: Ensure at most one service changed
+      - name: Ensure at most one project changed
         id: check
         run: |
           BASE="${{ github.event.pull_request.base.sha }}"
@@ -47,21 +41,21 @@ jobs:
           # Three dots: the PR's own changes since it left the base branch. Two dots
           # would also list every change that landed on the base branch after the PR's
           # branch was cut, so a branch that is behind its base reads as touching
-          # more services than it does.
-          CHANGED="$(git diff --name-only "$BASE...$HEAD" -- 'services/' | cut -d/ -f1-2 | sort -u)"
+          # more projects than it does.
+          CHANGED="$(git diff --name-only "$BASE...$HEAD" -- 'projects/' | cut -d/ -f1-2 | sort -u)"
           COUNT="$(printf '%s\n' "$CHANGED" | grep -c . || true)"
 
           if [ "$COUNT" -gt 1 ]; then
-            echo "::error::continuo accepts exactly one changed service per release; this PR touches ${COUNT}:"
+            echo "::error::continuo accepts exactly one changed project per release; this PR touches ${COUNT}:"
             printf '%s\n' "$CHANGED"
             exit 1
           fi
 
-          echo "OK: ${COUNT} service(s) changed"
+          echo "OK: ${COUNT} project(s) changed"
 
-          # The ontology is one file, not a services/<svc>/ folder, so it never counts toward the
-          # one changed service. A change to it is checked against every service
-          # (ontology-services-check).
+          # The ontology is one file, not a projects/<project>/ folder, so it never counts toward the
+          # one changed project. A change to it is checked against every project
+          # (ontology-projects-check).
           if [ -n "$(git diff --name-only "$BASE...$HEAD" -- ontology/ontology.yaml)" ]; then
             echo "ontology_changed=true" >> "$GITHUB_OUTPUT"
           else
@@ -69,24 +63,41 @@ jobs:
           fi
 
           if [ "$COUNT" -eq 1 ]; then
-            SERVICE="$(printf '%s' "$CHANGED" | cut -d/ -f2)"
-            # A service is python-odcs iff its contracts/ holds *.odcs.yaml
-            # files; every other service is a dbt project. This mirrors
+            PROJECT="$(printf '%s' "$CHANGED" | cut -d/ -f2)"
+            # The later jobs paste the project into their scripts, and the release pushes it
+            # as a Docker image name, so a folder name that is not a plain project name is
+            # refused here, as release.yml refuses it.
+            if ! [[ $PROJECT =~ ^[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*$ ]]; then
+              # The value is not echoed: a newline in it would start a workflow command.
+              echo "::error::the changed folder under projects/ is not a project name: lowercase letters and digits, with '.', '_', '__' or '-' only between them, as a Docker image name is written"; exit 1
+            fi
+            # A file directly under projects/, or a project folder the pull request deletes,
+            # is no project release.yml can build.
+            if [ ! -d "projects/${PROJECT}" ]; then
+              echo "::error::projects/${PROJECT} is not a project folder in this pull request"; exit 1
+            fi
+            # ontology is the project of ontology/ontology.yaml, kind ontology, as release.yml
+            # refuses it.
+            if [ "${PROJECT}" = "ontology" ]; then
+              echo "::error::projects/ontology cannot be a project: ontology is the project of ontology/ontology.yaml"; exit 1
+            fi
+            # A project has the kind python when its contracts/ holds *.odcs.yaml
+            # files; every other project is a dbt project. This mirrors
             # release.yml's own detect job so a PR is checked the same way its
             # eventual release would be.
-            if compgen -G "services/${SERVICE}/contracts/*.odcs.yaml" > /dev/null; then KIND="python-odcs"; else KIND="dbt"; fi
-            echo "service=${SERVICE}" >> "$GITHUB_OUTPUT"
+            if compgen -G "projects/${PROJECT}/contracts/*.odcs.yaml" > /dev/null; then KIND="python"; else KIND="dbt"; fi
+            echo "project=${PROJECT}" >> "$GITHUB_OUTPUT"
             echo "kind=${KIND}" >> "$GITHUB_OUTPUT"
           fi
 
-  # Python services skip dbt entirely, so nothing above exercises their
+  # Python projects skip dbt entirely, so nothing above exercises their
   # contracts or scripts. Run the same gate release.yml runs before it ever
   # builds an image, so a broken contract/script fails the PR instead of the
   # push-to-main release, plus a dry run of the `pack` release.yml runs after
   # the build.
   python-checks:
-    needs: check-single-service
-    if: needs.check-single-service.outputs.kind == 'python-odcs'
+    needs: check-single-project
+    if: needs.check-single-project.outputs.kind == 'python'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -98,16 +109,16 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
 
-      # The CLI must be the runtime the service image runs: from runtime 0.12.0
+      # The CLI must be the runtime the project image runs: from runtime 0.12.0
       # on, the image's harness recomputes at start the hashes this CLI writes
       # and refuses to run on a mismatch. So the version is read from the
-      # service Dockerfile's FROM line, the one place it is written: a runtime
+      # project Dockerfile's FROM line, the one place it is written: a runtime
       # upgrade is a change to that line alone, and the step after the install
       # checks that the CLI is that version.
-      - name: Read the runtime version from the service image
+      - name: Read the runtime version from the project image
         id: runtime
         run: |
-          version="$(python3 scripts/image_pins.py runtime-version "services/${{ needs.check-single-service.outputs.service }}")"
+          version="$(python3 scripts/image_pins.py runtime-version "projects/${{ needs.check-single-project.outputs.project }}")"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Install continuo-python-runtime
@@ -123,13 +134,13 @@ jobs:
         # a failing `uv tool list` would otherwise read as "not installed".
         run: |
           listed="$(uv tool list --color never)"
-          python3 scripts/image_pins.py check-installed "services/${{ needs.check-single-service.outputs.service }}" <<< "$listed"
+          python3 scripts/image_pins.py check-installed "projects/${{ needs.check-single-project.outputs.project }}" <<< "$listed"
 
       - name: Lint python scripts (no hand-written SQL)
-        run: continuo-runtime lint "services/${{ needs.check-single-service.outputs.service }}/scripts"
+        run: continuo-runtime lint "projects/${{ needs.check-single-project.outputs.project }}/scripts"
 
       - name: Validate python contracts
-        run: continuo-runtime validate "services/${{ needs.check-single-service.outputs.service }}/contracts" --dialect postgres --service "${{ needs.check-single-service.outputs.service }}" --ontology ontology/ontology.yaml
+        run: continuo-runtime validate "projects/${{ needs.check-single-project.outputs.project }}/contracts" --dialect postgres --project "${{ needs.check-single-project.outputs.project }}" --ontology ontology/ontology.yaml
 
       # A dry run: CI builds no image, so the pack gets an empty package
       # listing (--image-packages) where the release's pack gets the pushed
@@ -139,9 +150,9 @@ jobs:
       - name: Dry-run the ODCS bundle pack
         run: |
           echo '{}' > "${RUNNER_TEMP}/packages.json"
-          continuo-runtime pack "services/${{ needs.check-single-service.outputs.service }}/contracts" \
-            --service "${{ needs.check-single-service.outputs.service }}" \
-            --repo-root "services/${{ needs.check-single-service.outputs.service }}" \
+          continuo-runtime pack "projects/${{ needs.check-single-project.outputs.project }}/contracts" \
+            --project "${{ needs.check-single-project.outputs.project }}" \
+            --repo-root "projects/${{ needs.check-single-project.outputs.project }}" \
             --dialect postgres \
             --image-packages "${RUNNER_TEMP}/packages.json" \
             --out "${RUNNER_TEMP}/odcs-bundle.json"
@@ -149,8 +160,8 @@ jobs:
   # A dbt image pins every dbt package, so a rebuild cannot change the macros
   # dbt runs without a reviewed change to its Dockerfile.
   dbt-checks:
-    needs: check-single-service
-    if: needs.check-single-service.outputs.kind == 'dbt'
+    needs: check-single-project
+    if: needs.check-single-project.outputs.kind == 'dbt'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -159,27 +170,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check the dbt pins of the service image
-        run: python3 scripts/image_pins.py check-dbt "services/${{ needs.check-single-service.outputs.service }}"
+      - name: Check the dbt pins of the project image
+        run: python3 scripts/image_pins.py check-dbt "projects/${{ needs.check-single-project.outputs.project }}"
 
-  # continuo's producer-side lite check, on the changed dbt service: the part of
+  # continuo's producer-side lite check, on the changed dbt project: the part of
   # the release's own contract checks that needs no running continuo. It parses
   # the project and reports what the release would reject, such as a seed whose
   # declared columns differ from its CSV header, two nodes that share a contract
-  # id, or a node whose service is not the one the project deploys under. A
+  # id, or a node whose project is not the one the release names. A
   # passing check does not guarantee the release: the release has more stages.
-  # dbt runs from a Python 3.12 virtualenv built from the service image's own
+  # dbt runs from a Python 3.12 virtualenv built from the project image's own
   # pins (the library needs Python 3.14, so it is a separate tool) and the check
   # is given that dbt with --dbt.
   dbt-lite-check:
-    needs: check-single-service
-    if: needs.check-single-service.outputs.kind == 'dbt'
+    needs: check-single-project
+    if: needs.check-single-project.outputs.kind == 'dbt'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
     env:
-      SERVICE: ${{ needs.check-single-service.outputs.service }}
+      PROJECT: ${{ needs.check-single-project.outputs.project }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -189,10 +200,10 @@ jobs:
 
       # The requirements are read into a variable first, so that a Dockerfile
       # image_pins.py refuses fails the step with its own message.
-      - name: Install the dbt the service image pins
+      - name: Install the dbt the project image pins
         run: |
           uv venv --python 3.12 "$RUNNER_TEMP/dbt"
-          requirements="$(python3 scripts/image_pins.py dbt-requirements "services/${SERVICE}")"
+          requirements="$(python3 scripts/image_pins.py dbt-requirements "projects/${PROJECT}")"
           # One requirement per line, split into one argument each on purpose; none holds a glob character.
           # shellcheck disable=SC2086
           uv pip install --python "$RUNNER_TEMP/dbt/bin/python" $requirements
@@ -201,12 +212,12 @@ jobs:
         run: uv tool install --python 3.14 "continuo-contracts==${CONTINUO_CONTRACTS_VERSION}"
 
       - name: Check the dbt project with continuo's lite check
-        run: continuo-contracts dbt check "services/${SERVICE}" --dbt "$RUNNER_TEMP/dbt/bin/dbt" --ontology ontology/ontology.yaml
+        run: continuo-contracts dbt check "projects/${PROJECT}" --dbt "$RUNNER_TEMP/dbt/bin/dbt" --ontology ontology/ontology.yaml
 
   # The check every ontology repository runs (the demo is one): the file loads and
-  # holds no error. It runs on every pull request, so a service's pull request is
+  # holds no error. It runs on every pull request, so a project's pull request is
   # checked against the ontology file it carries, and a change to the file is
-  # checked even when no service changed. The service-side checks, which read the
+  # checked even when no project changed. The project-side checks, which read the
   # file, are in dbt-lite-check and python-checks.
   ontology-check:
     runs-on: ubuntu-latest
@@ -226,15 +237,15 @@ jobs:
       - name: Check the ontology file
         run: continuo-contracts ontology check ontology/ontology.yaml
 
-  # A pull request that changes the ontology file is checked against every service of this
-  # checkout, not only the one service it changes. The ontology and every contract it is
-  # checked against live in this repository, so a property that a service binds and the
-  # change renames or removes is found here, and not on dev after the merge. A service the
+  # A pull request that changes the ontology file is checked against every project of this
+  # checkout, not only the one project it changes. The ontology and every contract it is
+  # checked against live in this repository, so a property that a project binds and the
+  # change renames or removes is found here, and not on dev after the merge. A project the
   # ontology does not declare passes with one information line. dbt-lite-check and
-  # python-checks still check the one changed service on every pull request.
-  ontology-services-check:
-    needs: check-single-service
-    if: needs.check-single-service.outputs.ontology_changed == 'true'
+  # python-checks still check the one changed project on every pull request.
+  ontology-projects-check:
+    needs: check-single-project
+    if: needs.check-single-project.outputs.ontology_changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -249,40 +260,42 @@ jobs:
       - name: Install continuo-contracts
         run: uv tool install --python 3.14 "continuo-contracts==${CONTINUO_CONTRACTS_VERSION}"
 
-      # One dbt for each service, built from the pins of that service's own Dockerfile, as
-      # dbt-lite-check does. A failing service does not hide the next, and the step fails.
-      - name: Check every dbt service against the ontology
+      # One dbt for each project, built from the pins of that project's own Dockerfile, as
+      # dbt-lite-check does. A failing project does not hide the next, and the step fails.
+      - name: Check every dbt project against the ontology
         run: |
           status=0
-          for dir in services/*/; do
-            service="$(basename "$dir")"
+          for dir in projects/*/; do
+            project="$(basename "$dir")"
             if compgen -G "${dir}contracts/*.odcs.yaml" > /dev/null; then continue; fi
-            uv venv --python 3.12 "$RUNNER_TEMP/dbt-${service}"
-            requirements="$(python3 scripts/image_pins.py dbt-requirements "services/${service}")"
+            uv venv --python 3.12 "$RUNNER_TEMP/dbt-${project}"
+            requirements="$(python3 scripts/image_pins.py dbt-requirements "projects/${project}")"
             # One requirement per line, split into one argument each on purpose; none holds a glob character.
             # shellcheck disable=SC2086
-            uv pip install --python "$RUNNER_TEMP/dbt-${service}/bin/python" $requirements
-            continuo-contracts dbt check "services/${service}" --dbt "$RUNNER_TEMP/dbt-${service}/bin/dbt" --ontology ontology/ontology.yaml || status=1
+            uv pip install --python "$RUNNER_TEMP/dbt-${project}/bin/python" $requirements
+            continuo-contracts dbt check "projects/${project}" --dbt "$RUNNER_TEMP/dbt-${project}/bin/dbt" --ontology ontology/ontology.yaml || status=1
           done
           exit "$status"
 
-      # The CLI is the runtime the service image runs, read from its Dockerfile, as python-checks does.
-      - name: Check every Python service against the ontology
+      # The CLI is the runtime the project image runs, read from its Dockerfile, as python-checks does.
+      - name: Check every Python project against the ontology
         run: |
           status=0
-          for dir in services/*/; do
-            service="$(basename "$dir")"
+          for dir in projects/*/; do
+            project="$(basename "$dir")"
             if ! compgen -G "${dir}contracts/*.odcs.yaml" > /dev/null; then continue; fi
-            version="$(python3 scripts/image_pins.py runtime-version "services/${service}")"
+            version="$(python3 scripts/image_pins.py runtime-version "projects/${project}")"
             uv tool install --force "continuo-python-runtime==${version}" || \
               uv tool install --force "git+https://github.com/carolsimone/continuo-python-runtime@v${version}"
-            continuo-runtime validate "services/${service}/contracts" --dialect postgres --service "${service}" --ontology ontology/ontology.yaml || status=1
+            continuo-runtime validate "projects/${project}/contracts" --dialect postgres --project "${project}" --ontology ontology/ontology.yaml || status=1
           done
           exit "$status"
 
-  # The scripts CI and CD run, and the wiring of the workflows, are tested on
-  # every change to them: release.sh against a stub of continuo's release API,
-  # the image pins, and the text of both workflows.
+  # The scripts CI and CD run, the wiring of the workflows and the words of the
+  # repository are tested on every pull request: release.sh against a stub of
+  # continuo's release API, the image pins, the text of both workflows, the seed
+  # generators, and every tracked file and path against the names continuo's
+  # glossary retired.
   scripts:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -299,4 +312,4 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Test the scripts
-        run: uvx pytest==9.1.1 scripts/tests/test_release_sh.py scripts/tests/test_image_pins.py scripts/tests/test_workflows.py -v
+        run: uvx pytest==9.1.1 scripts/tests -v

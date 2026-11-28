@@ -1,0 +1,9 @@
+version: 2
+
+sources:
+  - name: project_3
+    schema: analytics
+    tables:
+      - name: table_d
+      - name: table_e
+      - name: table_f
