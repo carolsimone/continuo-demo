@@ -77,31 +77,13 @@ class CiChecksTest(unittest.TestCase):
         # The whole folder, so a new test file runs without a change to the workflow.
         self.assertIn("        run: uvx pytest==9.1.1 scripts/tests -v\n", _CI)
 
-    def test_ci_runs_on_every_file_the_glossary_check_reads(self):
-        # The glossary check reads every tracked file, so a change to the README or to any
-        # script starts CI too.
-        paths = _CI.split("\njobs:\n", 1)[0]
-        for path in ("'projects/**'", "'ontology/**'", "'scripts/**'", "'README.md'", "'.gitignore'",
-                     "'.github/workflows/ci.yml'", "'.github/workflows/release.yml'"):
-            with self.subTest(path=path):
-                self.assertIn(f"\n      - {path}\n", paths)
-
-    def test_every_file_the_glossary_check_reads_starts_ci(self):
-        # A tracked file that no `paths` entry of ci.yml names never starts CI, so a pull
-        # request that changes only that file could bring back a retired name unchecked.
-        filters = re.findall(r"(?m)^      - '([^']+)'$", _CI.split("\njobs:\n", 1)[0])
-        listed = subprocess.run(
-            ["git", "ls-files", "-z"], cwd=_ROOT, check=True, capture_output=True, text=True
-        ).stdout
-        for path in (p for p in listed.split("\0") if p):
-            # The glossary check skips seed data and the licence text.
-            if path.endswith(".csv") or path == "LICENSE":
-                continue
-            with self.subTest(path=path):
-                self.assertTrue(
-                    any(path == f or (f.endswith("/**") and path.startswith(f[:-2])) for f in filters),
-                    f"{path} is read by the glossary check, but no paths entry of ci.yml starts CI for it",
-                )
+    def test_every_pull_request_starts_ci(self):
+        # The glossary check reads every tracked file and path, so ci.yml has no paths filter:
+        # with one, a pull request that adds a file in a folder no entry names, or changes only
+        # such a file, would start no CI and could bring back a retired name unchecked.
+        header = _CI.split("\njobs:\n", 1)[0]
+        self.assertIn("\non:\n  pull_request:\n    branches: [main]\n", header)
+        self.assertNotIn("paths", header.split("\non:\n", 1)[1])
 
 
 def _step(text, name):
@@ -496,9 +478,9 @@ class OntologyCheckTest(unittest.TestCase):
         )
 
     def test_a_change_to_the_ontology_triggers_ci_and_the_release(self):
-        for name, text in (("ci.yml", _CI), ("release.yml", _RELEASE)):
-            with self.subTest(workflow=name):
-                self.assertIn("\n      - 'ontology/**'\n", text.split("\njobs:\n", 1)[0])
+        # ci.yml starts on every pull request (no paths filter); release.yml names the folder.
+        self.assertNotIn("paths", _CI.split("\njobs:\n", 1)[0].split("\non:\n", 1)[1])
+        self.assertIn("\n      - 'ontology/**'\n", _RELEASE.split("\njobs:\n", 1)[0])
 
 
 _DETECT = "detect"
@@ -720,7 +702,7 @@ class OntologyReleaseTest(unittest.TestCase):
                 self.assertNotIn("project", outputs)
 
     def test_a_dispatch_refuses_a_name_that_is_not_one_projects_folder(self):
-        for project in ("", "../ontology", "a/b", ".hidden", "core "):
+        for project in ("", "../ontology", "a/b", ".hidden", "core ", "Core", "core-", "a..b"):
             with self.subTest(project=project):
                 status, outputs, text, _ = _run_detect([], event_name="workflow_dispatch", project=project)
                 self.assertEqual(status, 1)
@@ -730,7 +712,7 @@ class OntologyReleaseTest(unittest.TestCase):
     def test_a_push_refuses_a_changed_folder_that_is_not_a_project_name(self):
         # The later steps paste the project into their scripts, so a folder name a push brings
         # is held to the rule a dispatch input is.
-        for folder in ("$(echo INJECTED)", "a b", ".hidden"):
+        for folder in ("$(echo INJECTED)", "a b", ".hidden", "Core", "core_", "a..b"):
             with self.subTest(folder=folder):
                 status, outputs, text, _ = _run_detect([f"projects/{folder}/m.sql"])
                 self.assertEqual(status, 1)
@@ -738,9 +720,21 @@ class OntologyReleaseTest(unittest.TestCase):
                 self.assertNotIn("INJECTED\n", text.replace("echo INJECTED", ""))
                 self.assertNotIn("project", outputs)
 
+    def test_a_push_refuses_a_file_directly_under_projects(self):
+        # `projects/README.md` reads as the folder `README.md`: no project to build.
+        status, outputs, text, _ = _run_detect(["projects/readme.md"])
+        self.assertEqual(status, 1)
+        self.assertIn("projects/readme.md is not a project folder at this commit", text)
+        self.assertNotIn("project", outputs)
+
+    def test_ci_refuses_a_changed_path_that_is_not_a_project_folder(self):
+        step = _job_text(_CI, "check-single-project")
+        self.assertIn('            if [ ! -d "projects/${PROJECT}" ]; then\n', step)
+        self.assertLess(step.index('if [ ! -d "projects/${PROJECT}" ]'), step.index('echo "project=${PROJECT}"'))
+
     def test_ci_refuses_a_changed_folder_that_is_not_a_project_name(self):
         step = _job_text(_CI, "check-single-project")
-        self.assertIn("            if ! [[ $PROJECT =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then\n", step)
+        self.assertIn("            if ! [[ $PROJECT =~ ^[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*$ ]]; then\n", step)
         self.assertLess(step.index("if ! [[ $PROJECT =~"), step.index('echo "project=${PROJECT}"'))
 
     def test_no_run_script_pastes_a_dispatch_input(self):

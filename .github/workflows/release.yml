@@ -95,10 +95,11 @@ jobs:
           # changed. A push release derives the project from the diff below.
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             PROJECT="${INPUT_PROJECT}"
-            # One folder name under projects/: no path, nothing hidden, no whitespace.
-            if ! [[ $PROJECT =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            # One folder name under projects/, written as a Docker image name, which the
+            # build pushes it as: no path, nothing hidden, no whitespace, no capital.
+            if ! [[ $PROJECT =~ ^[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*$ ]]; then
               # The value is not echoed: a newline in it would start a workflow command.
-              echo "::error::the project input is not a project name: letters, digits, '.', '_' and '-', starting with a letter or digit"; exit 1
+              echo "::error::the project input is not a project name: lowercase letters and digits, with '.', '_', '__' or '-' only between them, as a Docker image name is written"; exit 1
             fi
             # The ontology is not a projects/<project>/ folder. A dispatch for it releases
             # ontology/ontology.yaml at this commit through release-ontology, and no project.
@@ -184,11 +185,17 @@ jobs:
 
           # Exactly one project changed → normal single-project release.
           PROJECT="$(printf '%s' "$CHANGED" | cut -d/ -f2)"
-          # The later steps paste the project into their scripts, so a folder name
-          # that is not a plain project name is refused here, as a dispatch input is.
-          if ! [[ $PROJECT =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+          # The later steps paste the project into their scripts and push it as a Docker
+          # image name, so a folder name that is not a plain project name is refused here,
+          # as a dispatch input is.
+          if ! [[ $PROJECT =~ ^[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*$ ]]; then
             # The value is not echoed: a newline in it would start a workflow command.
-            echo "::error::the changed folder under projects/ is not a project name: letters, digits, '.', '_' and '-', starting with a letter or digit"; exit 1
+            echo "::error::the changed folder under projects/ is not a project name: lowercase letters and digits, with '.', '_', '__' or '-' only between them, as a Docker image name is written"; exit 1
+          fi
+          # A file directly under projects/, or a project folder the push deleted, is no
+          # project to build.
+          if [ ! -d "projects/${PROJECT}" ]; then
+            echo "::error::projects/${PROJECT} is not a project folder at this commit"; exit 1
           fi
           # A project has the kind python when its contracts/ holds *.odcs.yaml files;
           # every other project is a dbt project.

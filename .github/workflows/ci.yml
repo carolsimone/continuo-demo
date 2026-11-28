@@ -3,17 +3,13 @@ name: ci
 # continuo models a release as a SINGLE changed project (see release.yml), so a
 # PR touching more than one projects/<project>/ can never be released as-is. Catch
 # that at PR time instead of letting it land on main and fail release.yml.
+#
+# Every pull request starts it, with no paths filter: the scripts job's glossary
+# check reads every tracked file and path, so a pull request that adds or changes
+# any file, a new one in a new folder included, is checked.
 on:
   pull_request:
     branches: [main]
-    paths:
-      - 'projects/**'
-      - 'ontology/**'
-      - 'scripts/**'
-      - 'README.md'
-      - '.gitignore'
-      - '.github/workflows/ci.yml'
-      - '.github/workflows/release.yml'
 
 env:
   # The continuo-contracts version that continuo's topology-controller/pyproject.toml pins on main.
@@ -68,11 +64,17 @@ jobs:
 
           if [ "$COUNT" -eq 1 ]; then
             PROJECT="$(printf '%s' "$CHANGED" | cut -d/ -f2)"
-            # The later jobs paste the project into their scripts, so a folder name
-            # that is not a plain project name is refused here, as release.yml refuses it.
-            if ! [[ $PROJECT =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            # The later jobs paste the project into their scripts, and the release pushes it
+            # as a Docker image name, so a folder name that is not a plain project name is
+            # refused here, as release.yml refuses it.
+            if ! [[ $PROJECT =~ ^[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*$ ]]; then
               # The value is not echoed: a newline in it would start a workflow command.
-              echo "::error::the changed folder under projects/ is not a project name: letters, digits, '.', '_' and '-', starting with a letter or digit"; exit 1
+              echo "::error::the changed folder under projects/ is not a project name: lowercase letters and digits, with '.', '_', '__' or '-' only between them, as a Docker image name is written"; exit 1
+            fi
+            # A file directly under projects/, or a project folder the pull request deletes,
+            # is no project release.yml can build.
+            if [ ! -d "projects/${PROJECT}" ]; then
+              echo "::error::projects/${PROJECT} is not a project folder in this pull request"; exit 1
             fi
             # A project has the kind python when its contracts/ holds *.odcs.yaml
             # files; every other project is a dbt project. This mirrors
@@ -285,7 +287,7 @@ jobs:
           exit "$status"
 
   # The scripts CI and CD run, the wiring of the workflows and the words of the
-  # repository are tested on every change to them: release.sh against a stub of
+  # repository are tested on every pull request: release.sh against a stub of
   # continuo's release API, the image pins, the text of both workflows, the seed
   # generators, and every tracked file and path against the names continuo's
   # glossary retired.
