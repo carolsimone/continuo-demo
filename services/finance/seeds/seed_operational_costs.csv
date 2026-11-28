@@ -239,3 +239,6 @@ cost_id,cost_date,category,subcategory,cost_type,amount,currency
 238,2024-12-01 00:00:00,G&A,finance_legal,fixed,1696.12,EUR
 239,2024-12-01 00:00:00,G&A,hr_admin,fixed,1590.3,EUR
 240,2024-12-01 00:00:00,G&A,insurance,fixed,618.79,EUR
+241,15/03/2024 00:00:00,COGS,cloud_hosting,variable,-120.0,EUR
+242,22/03/2024 00:00:00,G&A,office_rent,fixed,-310.5,EUR
+243,28/03/2024 00:00:00,R&D,tooling_saas,fixed,-45.0,EUR
